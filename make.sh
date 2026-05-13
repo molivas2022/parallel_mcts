@@ -1,0 +1,1 @@
+g++ -O3 -march=native -flto common.cpp dsu.cpp env.cpp mcts.cpp main.cpp -o main
