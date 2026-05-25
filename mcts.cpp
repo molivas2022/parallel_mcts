@@ -1,55 +1,85 @@
 #include "mcts.hpp"
-
 #include <cmath>
 #include <random>
+#include <iostream>
 
-Node::Node(const State& s, Node* p, Action a) 
-    : state(s), parent(p), action(a), visits(0), wins(0.0) {
-    ActionSpace space = get_actions(s);
-    untried_actions.reserve(space.count);
-    for (u i = 0; i < space.count; ++i) {
-        untried_actions.push_back(space.actions[i]);
-    }
+/* Memory Pool */
+
+NodePool::NodePool(size_t capacity) {
+    pool.resize(capacity);
+    cursor = 0;
 }
 
-// NOTE: it creates the entire mcts tree from scratch each step
+void NodePool::reset() {
+    cursor = 0; // O(1) pool clearing
+}
+
+Node* NodePool::allocate(const State& s, Node* p, Action a) {
+    if (cursor >= pool.size()) {
+        std::cerr << "Error: Node pool exhausted\n";
+        exit(1);
+    }
+
+    Node* n = &pool[cursor++];
+    
+    n->state = s;
+    n->parent = p;
+    n->action = a;
+    n->visits = 0;
+    n->wins = 0.0;
+    n->children.clear(); 
+    n->untried_space = get_actions(s);
+    
+    return n;
+}
+
+/* MCTS */
+
 Action get_mcts_action(const State& root_state, int iterations) {
-    auto root = std::make_unique<Node>(root_state, nullptr, Action{0});
+    // 100,000 capacity is sufficient for N <= 13 and N_ITERS <= 60000
+    static thread_local NodePool memory_pool(100000); 
+    
+    memory_pool.reset();
+    Node* root = memory_pool.allocate(root_state, nullptr, Action{0});
     
     static thread_local std::random_device rd;
-    static thread_local std::mt19937 eng(rd());
+    // NOTE: use a hardcoded seed instead of rd() for deterministic parallel benchmarking
+    static thread_local std::mt19937 eng(rd()); 
 
     for (int i = 0; i < iterations; ++i) {
-        Node* node = root.get();
+        Node* node = root;
         
         // Selection
-        while (node->untried_actions.empty() && !node->children.empty()) {
+        while (node->untried_space.count == 0 && !node->children.empty()) {
             Node* best_child = nullptr;
             double best_score = -1.0;
-            for (auto& child : node->children) {
+            for (Node* child : node->children) {
                 double exploit = child->wins / child->visits;
                 double explore = 1.414 * std::sqrt(std::log(node->visits) / child->visits);
                 double score = exploit + explore;
                 if (score > best_score) {
                     best_score = score;
-                    best_child = child.get();
+                    best_child = child;
                 }
             }
             node = best_child;
         }
         
         // Expansion
-        if (!node->untried_actions.empty() && node->state.winner == Player::None) {
-            std::uniform_int_distribution<int> dist(0, node->untried_actions.size() - 1);
+        if (node->untried_space.count > 0 && node->state.winner == Player::None) {
+            std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
             int idx = dist(eng);
-            Action action = node->untried_actions[idx];
+            Action action = node->untried_space.actions[idx];
             
-            node->untried_actions[idx] = node->untried_actions.back();
-            node->untried_actions.pop_back();
+            // O(1) removal of the selected action
+            node->untried_space.actions[idx] = node->untried_space.actions[node->untried_space.count - 1];
+            node->untried_space.count--;
             
             State next_s = next_state(node->state, action);
-            node->children.push_back(std::make_unique<Node>(next_s, node, action));
-            node = node->children.back().get();
+            Node* child = memory_pool.allocate(next_s, node, action);
+            
+            node->children.push_back(child);
+            node = child;
         }
         
         // Simulation
@@ -77,7 +107,7 @@ Action get_mcts_action(const State& root_state, int iterations) {
     
     Action best_action{0};
     int max_visits = -1;
-    for (auto& child : root->children) {
+    for (Node* child : root->children) {
         if (child->visits > max_visits) {
             max_visits = child->visits;
             best_action = child->action;

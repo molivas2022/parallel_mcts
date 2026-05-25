@@ -1,10 +1,8 @@
 #pragma once
 
+#include <vector>
 #include "common.hpp"
 #include "env.hpp"
-
-#include <vector>
-#include <memory>
 
 /* Auxiliar structures */
 
@@ -13,12 +11,24 @@ struct Node {
     Node* parent;
     Action action;
 
-    std::vector<std::unique_ptr<Node>> children;
+    std::vector<Node*> children;
     int visits;
     double wins; 
-    std::vector<Action> untried_actions;
+    ActionSpace untried_space;
 
-    Node(const State& s, Node* p, Action a);
+    Node() = default; 
+};
+
+/* Memory Pool */
+
+struct NodePool {
+    std::vector<Node> pool;
+    int cursor;
+
+    NodePool(size_t capacity);
+    
+    void reset();
+    Node* allocate(const State& s, Node* p, Action a);
 };
 
 /* MCTS */
