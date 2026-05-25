@@ -1,38 +1,19 @@
-#pragma once
+#include "mcts.hpp"
 
-#include <vector>
-#include <memory>
+#include <cmath>
 #include <random>
 
-#include "common.cpp"
-#include "env.cpp"
-
-/* Auxiliar structures */
-
-struct Node {
-    State state;
-    Node* parent;
-    Action action;
-
-    std::vector<std::unique_ptr<Node>> children;
-    int visits;
-    double wins; 
-    std::vector<Action> untried_actions;
-
-    Node(const State& s, Node* p, Action a) 
-        : state(s), parent(p), action(a), visits(0), wins(0.0) {
-        ActionSpace space = get_actions(s);
-        untried_actions.reserve(space.count);
-        for (u i = 0; i < space.count; ++i) {
-            untried_actions.push_back(space.actions[i]);
-        }
+Node::Node(const State& s, Node* p, Action a) 
+    : state(s), parent(p), action(a), visits(0), wins(0.0) {
+    ActionSpace space = get_actions(s);
+    untried_actions.reserve(space.count);
+    for (u i = 0; i < space.count; ++i) {
+        untried_actions.push_back(space.actions[i]);
     }
-};
-
-/* MCTS */
+}
 
 // NOTE: it creates the entire mcts tree from scratch each step
-static Action get_mcts_action(const State& root_state, int iterations) {
+Action get_mcts_action(const State& root_state, int iterations) {
     auto root = std::make_unique<Node>(root_state, nullptr, Action{0});
     
     static thread_local std::random_device rd;
@@ -94,7 +75,7 @@ static Action get_mcts_action(const State& root_state, int iterations) {
         }
     }
     
-    Action best_action;
+    Action best_action{0};
     int max_visits = -1;
     for (auto& child : root->children) {
         if (child->visits > max_visits) {

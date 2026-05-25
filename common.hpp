@@ -1,6 +1,6 @@
 /*
 Used representation: pointy-top
-Exanmple of 3x3 grid:
+Example of 3x3 grid:
      / \
     |0,0|
    / \ / \
@@ -25,13 +25,13 @@ using u = std::uint8_t; // max board size: N = 13
 
 enum class Player : u { None, First, Second };
 
-static constexpr u N = 13;
-static constexpr u PADDED_N = N + 2;
-static constexpr u BOARD_SIZE = PADDED_N * PADDED_N;
+constexpr u N = 13;
+constexpr u PADDED_N = N + 2;
+constexpr u BOARD_SIZE = PADDED_N * PADDED_N;
 
 /* Helpers */
 
-static constexpr std::array<u, 6> NEIGHBOR_OFFSETS = {
+constexpr std::array<u, 6> NEIGHBOR_OFFSETS = {
     static_cast<u>(-1),             // up left      (0, -1)
     static_cast<u>(-PADDED_N),      // up right     (-1, 0)
     static_cast<u>(PADDED_N - 1),   // left         (1, -1)

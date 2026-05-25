@@ -1,29 +1,6 @@
-#pragma once
+#include "env.hpp"
 
-#include <array>    // to allocate memory in the stack and not the heap
-
-#include "common.cpp"
-#include "dsu.cpp"
-
-/* Model */
-
-struct State {
-    Player turn;
-    Player winner;
-    std::array<Player, BOARD_SIZE> board;
-    DSU dsu; 
-};
-
-struct Action {
-    u move_idx;
-};
-
-struct ActionSpace {
-    std::array<Action, N * N> actions;  // the stack requires compile time alloc
-    u count = 0;
-};
-
-static State create_initial_state() {
+State create_initial_state() {
     State s;
     s.turn = Player::First;
     s.winner = Player::None;
@@ -44,7 +21,7 @@ static State create_initial_state() {
     return s;
 }
 
-static ActionSpace get_actions(const State& state) {
+ActionSpace get_actions(const State& state) {
     ActionSpace space;
     for (u r = 1; r <= N; ++r) {
         for (u c = 1; c <= N; ++c) {
@@ -57,7 +34,7 @@ static ActionSpace get_actions(const State& state) {
     return space;
 }
 
-static State next_state(const State& state, Action action) {
+State next_state(const State& state, Action action) {
     State next = state;
     Player current = next.turn;
     

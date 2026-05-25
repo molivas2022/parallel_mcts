@@ -45,12 +45,12 @@ Build/
 build-*/
 
 # CMake generated files
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-install_manifest.txt
-compile_commands.json
+# CMakeFiles/
+# CMakeCache.txt
+# cmake_install.cmake
+# Makefile
+# install_manifest.txt
+# compile_commands.json
 
 # Temporary files
 *.tmp
@@ -74,6 +74,11 @@ code_context.txt
 
 # executables
 main
+hex_mcts
+
+# objects
+obj/
 
 # results
 hex_results.csv
+results.csv

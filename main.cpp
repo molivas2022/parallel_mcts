@@ -1,13 +1,13 @@
+#include "common.hpp"
+#include "env.hpp"
+#include "mcts.hpp"
+
 #include <iostream>
 #include <vector>
 #include <random>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
-
-#include "common.cpp"
-#include "env.cpp"
-#include "mcts.cpp"
 
 /* Auxiliar structures and functions */
 
@@ -76,9 +76,9 @@ void print_dashboard(const std::vector<ExperimentResult>& past_results,
 }
 
 // Single experiment
-static ExperimentResult run_experiment(int matches, int iters_A, int iters_B,
-                                        const std::vector<ExperimentResult>& past_results,
-                                        int config_num, int total_configs) {
+ExperimentResult run_experiment(int matches, int iters_A, int iters_B,
+                                const std::vector<ExperimentResult>& past_results,
+                                int config_num, int total_configs) {
     int a_wins = 0;
     int b_wins = 0;
     long long total_turns = 0;
@@ -138,19 +138,25 @@ static ExperimentResult run_experiment(int matches, int iters_A, int iters_B,
 int main() {
     std::vector<ExperimentResult> all_results;
     
+    // std::vector<std::pair<int, int>> configs = {
+    //     {10000, 20000},
+    //     {20000, 40000},
+    //     {30000, 60000}
+    // };
     std::vector<std::pair<int, int>> configs = {
-        {10000, 20000},
-        {20000, 40000},
-        {30000, 60000}
+        {1000, 2000},
+        {2000, 4000},
+        {3000, 6000}
     };
-    
-    int matches = 30;
+
+    // int matches = 30;
+    int matches = 1;
     int total_experiments = configs.size();
     int current_exp = 1;
 
     // helper lambda to save a single result to the csv
     auto save_to_csv = [](const ExperimentResult& r, bool is_first) {
-        std::ofstream file("hex_results.csv", is_first ? std::ios::trunc : std::ios::app);
+        std::ofstream file("results.csv", is_first ? std::ios::trunc : std::ios::app);
         if (file.is_open()) {
             if (is_first) {
                 file << "N,Matches,Iters_A,Iters_B,Winrate_A,Winrate_B,AvgTurns,Time_Seconds\n";
