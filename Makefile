@@ -1,6 +1,6 @@
 # Compiler settings
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -O3 -march=native -flto
+CXXFLAGS = -std=c++17 -Wall -Wextra -O3 -march=native -flto -fopenmp
 
 # Executable name
 TARGET = main
@@ -9,7 +9,7 @@ TARGET = main
 OBJDIR = obj
 
 # Files
-SRCS = main.cpp env.cpp mcts.cpp dsu.cpp
+SRCS = $(wildcard *.cpp)
 
 # Pattern substitution: replaces .cpp with obj/.o and obj/.d
 OBJS = $(patsubst %.cpp, $(OBJDIR)/%.o, $(SRCS))

@@ -1,8 +1,10 @@
 #pragma once
 
-#include <vector>
 #include "common.hpp"
 #include "env.hpp"
+
+#include <vector>
+#include <functional>
 
 /* Auxiliar structures */
 
@@ -31,6 +33,9 @@ struct NodePool {
     Node* allocate(const State& s, Node* p, Action a);
 };
 
-/* MCTS */
+/* MCTS Interface */
 
-Action get_mcts_action(const State& root_state, int iterations);
+using AgentFunc = std::function<Action(const State&, int)>;
+
+Action get_mcts_action_sequential(const State& root_state, int iterations);
+Action get_mcts_action_leaf(const State& root_state, int iterations, int num_threads);
