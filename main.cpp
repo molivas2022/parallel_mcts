@@ -106,7 +106,8 @@ ExperimentResult run_experiment(int matches, int iters_A, int iters_B,
                 action = get_mcts_action(state, a_is_p1 ? iters_B : iters_A);
             }
 
-            state = next_state(state, action);
+            // Apply the chosen move directly to the main game state
+            next_state(state, action);
             game_turns++;
         }
 

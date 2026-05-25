@@ -71,11 +71,13 @@ Action get_mcts_action(const State& root_state, int iterations) {
             int idx = dist(eng);
             Action action = node->untried_space.actions[idx];
             
-            // O(1) removal of the selected action
             node->untried_space.actions[idx] = node->untried_space.actions[node->untried_space.count - 1];
             node->untried_space.count--;
             
-            State next_s = next_state(node->state, action);
+            // Explicit copy for the new node in the tree
+            State next_s = node->state;
+            next_state(next_s, action);
+            
             Node* child = memory_pool.allocate(next_s, node, action);
             
             node->children.push_back(child);
@@ -83,12 +85,15 @@ Action get_mcts_action(const State& root_state, int iterations) {
         }
         
         // Simulation
+        // One explicit copy for the entire simulation phase
         State sim_state = node->state;
         while (sim_state.winner == Player::None) {
             ActionSpace space = get_actions(sim_state);
             if (space.count == 0) break;
             std::uniform_int_distribution<int> dist(0, space.count - 1);
-            sim_state = next_state(sim_state, space.actions[dist(eng)]);
+            
+            // Mutate the disposable state directly
+            next_state(sim_state, space.actions[dist(eng)]);
         }
         Player winner = sim_state.winner;
         

@@ -1,9 +1,8 @@
 #pragma once
 
+#include <array>
 #include "common.hpp"
 #include "dsu.hpp"
-
-#include <array>    // to allocate memory in the stack and not the heap
 
 /* Model */
 
@@ -19,10 +18,10 @@ struct Action {
 };
 
 struct ActionSpace {
-    std::array<Action, N * N> actions;  // the stack requires compile time alloc
+    std::array<Action, N * N> actions;
     u count = 0;
 };
 
 State create_initial_state();
 ActionSpace get_actions(const State& state);
-State next_state(const State& state, Action action);
+void next_state(State& state, Action action);

@@ -34,27 +34,25 @@ ActionSpace get_actions(const State& state) {
     return space;
 }
 
-State next_state(const State& state, Action action) {
-    State next = state;
-    Player current = next.turn;
+void next_state(State& state, Action action) {
+    Player current = state.turn;
     
-    next.board[action.move_idx] = current;
+    state.board[action.move_idx] = current;
 
     for (u offset : NEIGHBOR_OFFSETS) {
         u neighbor = static_cast<u>(action.move_idx + offset);
-        if (next.board[neighbor] == current) {
-            next.dsu.unite(action.move_idx, neighbor);
+        if (state.board[neighbor] == current) {
+            state.dsu.unite(action.move_idx, neighbor);
         }
     }
     
     if (current == Player::First) {
-        if (next.dsu.find(0 * PADDED_N + 1) == next.dsu.find((N + 1) * PADDED_N + 1)) 
-            next.winner = Player::First;
+        if (state.dsu.find(0 * PADDED_N + 1) == state.dsu.find((N + 1) * PADDED_N + 1)) 
+            state.winner = Player::First;
     } else {
-        if (next.dsu.find(1 * PADDED_N + 0) == next.dsu.find(1 * PADDED_N + (N + 1))) 
-            next.winner = Player::Second;
+        if (state.dsu.find(1 * PADDED_N + 0) == state.dsu.find(1 * PADDED_N + (N + 1))) 
+            state.winner = Player::Second;
     }
 
-    next.turn = (state.turn == Player::First) ? Player::Second : Player::First;
-    return next;
+    state.turn = (state.turn == Player::First) ? Player::Second : Player::First;
 }
