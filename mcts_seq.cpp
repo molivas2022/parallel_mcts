@@ -1,17 +1,10 @@
-#include "mcts.hpp"
+#include "agent.hpp"
 
 #include <cmath>
-#include <random>
 
-/* Sequential MCTS */
-
-Action get_mcts_action_sequential(const State& root_state, int iterations) {
-    static thread_local NodePool memory_pool(100000); 
-    
+Action SequentialAgent::next_action(const State& root_state) {
     memory_pool.reset();
     Node* root = memory_pool.allocate(root_state, nullptr, Action{0});
-    
-    static thread_local std::mt19937 eng(42); 
 
     for (int i = 0; i < iterations; ++i) {
         Node* node = root;
@@ -35,7 +28,7 @@ Action get_mcts_action_sequential(const State& root_state, int iterations) {
         // Expansion
         if (node->untried_space.count > 0 && node->state.winner == Player::None) {
             std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
-            int idx = dist(eng);
+            int idx = dist(eng); 
             Action action = node->untried_space.actions[idx];
             
             node->untried_space.actions[idx] = node->untried_space.actions[node->untried_space.count - 1];
@@ -55,7 +48,7 @@ Action get_mcts_action_sequential(const State& root_state, int iterations) {
             ActionSpace space = get_actions(sim_state);
             if (space.count == 0) break;
             std::uniform_int_distribution<int> dist(0, space.count - 1);
-            next_state(sim_state, space.actions[dist(eng)]);
+            next_state(sim_state, space.actions[dist(eng)]); 
         }
         Player winner = sim_state.winner;
         

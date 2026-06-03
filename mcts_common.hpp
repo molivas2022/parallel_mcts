@@ -32,10 +32,3 @@ struct NodePool {
     void reset();
     Node* allocate(const State& s, Node* p, Action a);
 };
-
-/* MCTS Interface */
-
-using AgentFunc = std::function<Action(const State&, int)>;
-
-Action get_mcts_action_sequential(const State& root_state, int iterations);
-Action get_mcts_action_leaf(const State& root_state, int iterations, int num_threads);

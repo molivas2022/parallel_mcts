@@ -1,18 +1,11 @@
-#include "mcts.hpp"
+#include "agent.hpp"
 
 #include <cmath>
-#include <random>
 #include <omp.h>
 
-/* Leaf Parallel MCTS */
-
-Action get_mcts_action_leaf(const State& root_state, int iterations, int num_threads) {
-    static thread_local NodePool memory_pool(200000); 
-    
+Action LeafParallelAgent::next_action(const State& root_state) {
     memory_pool.reset();
     Node* root = memory_pool.allocate(root_state, nullptr, Action{0});
-    
-    static std::mt19937 main_eng(42); 
 
     for (int i = 0; i < iterations; ++i) {
         Node* node = root;
@@ -36,7 +29,7 @@ Action get_mcts_action_leaf(const State& root_state, int iterations, int num_thr
         // Expansion
         if (node->untried_space.count > 0 && node->state.winner == Player::None) {
             std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
-            int idx = dist(main_eng);
+            int idx = dist(main_eng); 
             Action action = node->untried_space.actions[idx];
             
             node->untried_space.actions[idx] = node->untried_space.actions[node->untried_space.count - 1];
@@ -56,7 +49,8 @@ Action get_mcts_action_leaf(const State& root_state, int iterations, int num_thr
 
         #pragma omp parallel for num_threads(num_threads) reduction(+:first_wins, second_wins)
         for (int p = 0; p < num_threads; ++p) {
-            static thread_local std::mt19937 sim_eng(42 + omp_get_thread_num());
+            int thread_id = omp_get_thread_num();
+            auto& sim_eng = sim_engines[thread_id]; 
             
             State sim_state = node->state;
             while (sim_state.winner == Player::None) {

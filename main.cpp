@@ -1,16 +1,13 @@
 #include "common.hpp"
 #include "env.hpp"
-#include "mcts.hpp"
+#include "mcts_common.hpp"
+#include "agent.hpp"
 
 #include <iostream>
 #include <vector>
-#include <random>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
-#include <functional>
-
-/* Auxiliar structures and functions */
 
 struct ExperimentResult {
     int n_size;
@@ -25,7 +22,6 @@ struct ExperimentResult {
     double time_seconds;
 };
 
-// Renders in the console the current progress
 void print_dashboard(const std::vector<ExperimentResult>& past_results, 
                      int current_config, int total_configs, 
                      int n_size, int matches, 
@@ -35,11 +31,9 @@ void print_dashboard(const std::vector<ExperimentResult>& past_results,
                      int a_wins, int b_wins,
                      std::chrono::duration<double> elapsed) {
     
-    std::cout << "\033[2J\033[H";   // clears screen and resets cursor
-    
+    std::cout << "\033[2J\033[H";   
     std::cout << "Dashboard\n\n";
 
-    // completed experiments
     if (!past_results.empty()) {
         std::cout << "Completed Experiments:\n";
         std::cout << std::left 
@@ -64,7 +58,6 @@ void print_dashboard(const std::vector<ExperimentResult>& past_results,
         std::cout << "\n";
     }
 
-    // current experiment
     std::cout << "Current Experiment: " << current_config << " / " << total_configs << "\n";
     std::cout << "N         : " << n_size << "x" << n_size << "\n";
     std::cout << "Agent A   : " << name_A << " (" << iters_A << " iters)\n";
@@ -74,14 +67,11 @@ void print_dashboard(const std::vector<ExperimentResult>& past_results,
     std::cout << "Wins A    : " << a_wins << "\n";
     std::cout << "Wins B    : " << b_wins << "\n";
     std::cout << "Time      : " << std::fixed << std::setprecision(1) << elapsed.count() << " seconds\n";
-    
     std::cout << std::flush;
 }
 
-// Single experiment
 ExperimentResult run_experiment(int matches, 
-                                std::string name_A, AgentFunc agent_A, int iters_A, 
-                                std::string name_B, AgentFunc agent_B, int iters_B,
+                                Agent& agent_A, Agent& agent_B,
                                 const std::vector<ExperimentResult>& past_results,
                                 int config_num, int total_configs) {
     int a_wins = 0;
@@ -102,14 +92,15 @@ ExperimentResult run_experiment(int matches,
             auto current_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed = current_time - start_time;
             print_dashboard(past_results, config_num, total_configs, N, matches, 
-                            name_A, iters_A, name_B, iters_B, 
+                            agent_A.get_name(), agent_A.get_iters(), 
+                            agent_B.get_name(), agent_B.get_iters(), 
                             game, game_turns + 1, a_wins, b_wins, elapsed);
 
             Action action;
             if (state.turn == Player::First) {
-                action = a_is_p1 ? agent_A(state, iters_A) : agent_B(state, iters_B);
+                action = a_is_p1 ? agent_A.next_action(state) : agent_B.next_action(state);
             } else {
-                action = a_is_p1 ? agent_B(state, iters_B) : agent_A(state, iters_A);
+                action = a_is_p1 ? agent_B.next_action(state) : agent_A.next_action(state);
             }
 
             next_state(state, action);
@@ -131,10 +122,10 @@ ExperimentResult run_experiment(int matches,
     ExperimentResult res;
     res.n_size = N;
     res.matches = matches;
-    res.name_A = name_A;
-    res.name_B = name_B;
-    res.iters_A = iters_A;
-    res.iters_B = iters_B;
+    res.name_A = agent_A.get_name();
+    res.name_B = agent_B.get_name();
+    res.iters_A = agent_A.get_iters();
+    res.iters_B = agent_B.get_iters();
     res.winrate_A = (static_cast<double>(a_wins) / matches) * 100.0;
     res.winrate_B = (static_cast<double>(b_wins) / matches) * 100.0;
     res.avg_turns = static_cast<double>(total_turns) / matches;
@@ -146,15 +137,9 @@ ExperimentResult run_experiment(int matches,
 int main() {
     std::vector<ExperimentResult> all_results;
     
-    // Bind our specific configurations to the common AgentFunc signature
-    auto seq_agent = [](const State& s, int iters) { return get_mcts_action_sequential(s, iters); };
-    auto leaf_4_threads = [](const State& s, int iters) { return get_mcts_action_leaf(s, iters, 4); };
-    
-    // int matches = 30;
     int matches = 1;
     int total_experiments = 2;
 
-    // helper lambda to save a single result to the csv
     auto save_to_csv = [](const ExperimentResult& r, bool is_first) {
         std::ofstream file("results.csv", is_first ? std::ios::trunc : std::ios::app);
         if (file.is_open()) {
@@ -172,25 +157,23 @@ int main() {
 
     bool first_save = true;
 
+    // Instantiate the agents
+    SequentialAgent dumb_agent(10);
+    SequentialAgent seq_agent(10000);
+    LeafParallelAgent leaf_agent(2500, 4);
+
     // Experiment 1: Sequential
-    auto res1 = run_experiment(matches, 
-                               "Seq", seq_agent, 10000, 
-                               "Dumb", seq_agent, 10, 
-                               all_results, 1, total_experiments);
+    auto res1 = run_experiment(matches, seq_agent, dumb_agent, all_results, 1, total_experiments);
     all_results.push_back(res1);
     save_to_csv(res1, first_save);
     first_save = false;
 
     // Experiment 2: Leaf
-    // Leaf does 4 playouts per iteration, so 2500 * 4 = 10000 total simulations to keep work equal.
-    auto res2 = run_experiment(matches, 
-                               "Leaf_4T", leaf_4_threads, 2500, 
-                               "Dumb", seq_agent, 10, 
-                               all_results, 2, total_experiments);
+    auto res2 = run_experiment(matches, leaf_agent, dumb_agent, all_results, 2, total_experiments);
     all_results.push_back(res2);
     save_to_csv(res2, first_save);
 
-    // final output
+    // Final output
     std::cout << "\033[2J\033[H";
     std::cout << "All experiments completed!\n\n";
 

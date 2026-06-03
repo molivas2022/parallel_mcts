@@ -1,4 +1,4 @@
-#include "mcts.hpp"
+#include "mcts_common.hpp"
 
 #include <iostream>
 
