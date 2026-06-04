@@ -1,6 +1,9 @@
 #pragma once
 
+#include "agent.hpp"
+
 #include <string>
+#include <vector>
 
 enum class AgentType {
     Sequential,
@@ -10,7 +13,7 @@ enum class AgentType {
 struct ExperimentConfig {
     AgentType type;
     int iters;
-    int num_threads; // 1 for sequential
+    int num_threads;    // = 1 for Sequential
 };
 
 struct ExperimentResult {
@@ -23,3 +26,12 @@ struct ExperimentResult {
     double avg_turns;
     double time_seconds;
 };
+
+ExperimentResult run_experiment(const ExperimentConfig& config, 
+                                int matches, 
+                                Agent& baseline_agent, 
+                                const std::vector<ExperimentResult>& past_results, 
+                                int config_num, int total_configs);
+
+void save_to_csv(const ExperimentResult& r, bool is_first);
+void print_final_summary(const std::vector<ExperimentResult>& all_results);
