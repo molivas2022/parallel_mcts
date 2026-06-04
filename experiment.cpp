@@ -12,7 +12,7 @@
 void print_dashboard(const std::vector<ExperimentResult>& past_results, 
                      int current_config, int total_configs, 
                      int n_size, int matches, 
-                     const std::string& test_agent_name, int test_iters, int test_threads,
+                     const std::string& test_agent_name, int test_sims, int test_threads,
                      int current_match, int current_turn, 
                      int test_wins, int baseline_wins,
                      double accumulated_time) {
@@ -25,7 +25,7 @@ void print_dashboard(const std::vector<ExperimentResult>& past_results,
         std::cout << std::left 
                   << std::setw(5)  << "N" 
                   << std::setw(15) << "Agent"
-                  << std::setw(10) << "Iters"
+                  << std::setw(10) << "Sims"
                   << std::setw(10) << "Threads"
                   << std::setw(12) << "Winrate" 
                   << std::setw(12) << "MCTS Time(s)" << "\n";
@@ -34,7 +34,7 @@ void print_dashboard(const std::vector<ExperimentResult>& past_results,
             std::cout << std::left 
                       << std::setw(5)  << r.n_size 
                       << std::setw(15) << r.agent_name
-                      << std::setw(10) << r.iters
+                      << std::setw(10) << r.simulations
                       << std::setw(10) << r.num_threads
                       << std::fixed << std::setprecision(1)
                       << std::setw(12) << r.winrate 
@@ -46,7 +46,7 @@ void print_dashboard(const std::vector<ExperimentResult>& past_results,
 
     std::cout << "Current Experiment: " << current_config << " / " << total_configs << "\n";
     std::cout << "N         : " << n_size << "x" << n_size << "\n";
-    std::cout << "Testing   : " << test_agent_name << " (" << test_iters << " iters, " << test_threads << " threads)\n";
+    std::cout << "Testing   : " << test_agent_name << " (" << test_sims << " sims, " << test_threads << " threads)\n";
     std::cout << "Match     : " << current_match << " / " << matches << "\n";
     std::cout << "Turn      : " << current_turn << "\n";
     std::cout << "Test Wins : " << test_wins << "\n";
@@ -63,9 +63,9 @@ ExperimentResult run_experiment(const ExperimentConfig& config,
     
     std::unique_ptr<Agent> test_agent;
     if (config.type == AgentType::Sequential) {
-        test_agent = std::make_unique<SequentialAgent>(config.iters);
+        test_agent = std::make_unique<SequentialAgent>(config.simulations);
     } else if (config.type == AgentType::LeafParallel) {
-        test_agent = std::make_unique<LeafParallelAgent>(config.iters, config.num_threads);
+        test_agent = std::make_unique<LeafParallelAgent>(config.simulations, config.num_threads);
     }
 
     int test_wins = 0;
@@ -84,7 +84,7 @@ ExperimentResult run_experiment(const ExperimentConfig& config,
 
             // Print UI
             print_dashboard(past_results, config_num, total_configs, N, matches, 
-                            test_agent->get_name(), test_agent->get_iters(), test_agent->get_num_threads(),
+                            test_agent->get_name(), test_agent->get_simulations(), test_agent->get_num_threads(),
                             game, game_turns + 1, test_wins, baseline_wins, mcts_computation_time);
 
             Action action;
@@ -121,7 +121,7 @@ ExperimentResult run_experiment(const ExperimentConfig& config,
     res.n_size = N;
     res.matches = matches;
     res.agent_name = test_agent->get_name();
-    res.iters = test_agent->get_iters();
+    res.simulations = test_agent->get_simulations();
     res.num_threads = test_agent->get_num_threads();
     res.winrate = (static_cast<double>(test_wins) / matches) * 100.0;
     res.avg_turns = static_cast<double>(total_turns) / matches;
@@ -134,10 +134,10 @@ void save_to_csv(const ExperimentResult& r, bool is_first) {
     std::ofstream file("results.csv", is_first ? std::ios::trunc : std::ios::app);
     if (file.is_open()) {
         if (is_first) {
-            file << "N,Matches,Agent,Iters,Threads,Winrate,AvgTurns,MCTS_Time_Seconds\n";
+            file << "N,Matches,Agent,Sims,Threads,Winrate,AvgTurns,MCTS_Time_Seconds\n";
         }
         file << r.n_size << "," << r.matches << "," 
-             << r.agent_name << "," << r.iters << "," << r.num_threads << ","
+             << r.agent_name << "," << r.simulations << "," << r.num_threads << ","
              << std::fixed << std::setprecision(1) << r.winrate << ","
              << r.avg_turns << "," << std::setprecision(2) << r.time_seconds << "\n";
         file.close();
@@ -151,7 +151,7 @@ void print_final_summary(const std::vector<ExperimentResult>& all_results) {
     std::cout << std::left 
               << std::setw(5)  << "N" 
               << std::setw(15) << "Agent"
-              << std::setw(10) << "Iters"
+              << std::setw(10) << "Sims"
               << std::setw(10) << "Threads"
               << std::setw(12) << "Winrate" 
               << std::setw(12) << "Avg Turns" 
@@ -162,7 +162,7 @@ void print_final_summary(const std::vector<ExperimentResult>& all_results) {
         std::cout << std::left 
                   << std::setw(5)  << r.n_size 
                   << std::setw(15) << r.agent_name
-                  << std::setw(10) << r.iters
+                  << std::setw(10) << r.simulations
                   << std::setw(10) << r.num_threads
                   << std::fixed << std::setprecision(1)
                   << std::setw(12) << r.winrate 

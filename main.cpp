@@ -9,7 +9,7 @@ int main() {
 
     std::vector<ExperimentConfig> experiments = {
         {AgentType::Sequential, 10000, 1},
-        {AgentType::LeafParallel, 2500, 4}
+        {AgentType::LeafParallel, 10000, 4}
     };
 
     std::vector<ExperimentResult> all_results;

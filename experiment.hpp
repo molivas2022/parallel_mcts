@@ -12,7 +12,7 @@ enum class AgentType {
 
 struct ExperimentConfig {
     AgentType type;
-    int iters;
+    int simulations;
     int num_threads;    // = 1 for Sequential
 };
 
@@ -20,7 +20,7 @@ struct ExperimentResult {
     int n_size;
     int matches;
     std::string agent_name;
-    int iters;
+    int simulations;
     int num_threads;
     double winrate;
     double avg_turns;

@@ -6,7 +6,7 @@ Action SequentialAgent::next_action(const State& root_state) {
     memory_pool.reset();
     Node* root = memory_pool.allocate(root_state, nullptr, Action{0});
 
-    for (int i = 0; i < iterations; ++i) {
+    for (int i = 0; i < simulations; ++i) {
         Node* node = root;
         
         // Selection

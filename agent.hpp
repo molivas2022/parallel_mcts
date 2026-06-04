@@ -17,7 +17,7 @@ public:
     virtual Action next_action(const State& state) = 0;
     
     virtual std::string get_name() const = 0;
-    virtual int get_iters() const = 0;
+    virtual int get_simulations() const = 0;
     virtual int get_num_threads() const = 0;
 };
 
@@ -27,18 +27,18 @@ public:
 class SequentialAgent : public Agent {
 private:
     std::string name;
-    int iterations;
+    int simulations;
     NodePool memory_pool;
     std::mt19937 eng;
 
 public:
-    SequentialAgent(int iters, size_t pool_size = 100000)
-        : name("Sequential"), iterations(iters), memory_pool(pool_size), eng(std::random_device{}()) {}
+    SequentialAgent(int sims, size_t pool_size = 100000)
+        : name("Sequential"), simulations(sims), memory_pool(pool_size), eng(std::random_device{}()) {}
 
     Action next_action(const State& root_state) override;
     
     std::string get_name() const override { return name; }
-    int get_iters() const override { return iterations; }
+    int get_simulations() const override { return simulations; }
     int get_num_threads() const override { return 1; }
 };
 
@@ -46,7 +46,7 @@ public:
 class LeafParallelAgent : public Agent {
 private:
     std::string name;
-    int iterations;
+    int simulations;
     int num_threads;
     NodePool memory_pool;
     
@@ -54,8 +54,8 @@ private:
     std::vector<std::mt19937> sim_engines; 
 
 public:
-    LeafParallelAgent(int iters, int threads, size_t pool_size = 200000)
-        : name("Leaf"), iterations(iters), num_threads(threads), memory_pool(pool_size), main_eng(std::random_device{}()) 
+    LeafParallelAgent(int sims, int threads, size_t pool_size = 200000)
+        : name("Leaf"), simulations(sims), num_threads(threads), memory_pool(pool_size), main_eng(std::random_device{}()) 
     {
         std::random_device rd;
         for (int i = 0; i < num_threads; ++i) {
@@ -66,6 +66,6 @@ public:
     Action next_action(const State& root_state) override;
     
     std::string get_name() const override { return name; }
-    int get_iters() const override { return iterations; }
+    int get_simulations() const override { return simulations; }
     int get_num_threads() const override { return num_threads; }
 };

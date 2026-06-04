@@ -7,7 +7,9 @@ Action LeafParallelAgent::next_action(const State& root_state) {
     memory_pool.reset();
     Node* root = memory_pool.allocate(root_state, nullptr, Action{0});
 
-    for (int i = 0; i < iterations; ++i) {
+    int loop_iterations = simulations / num_threads;
+
+    for (int i = 0; i < loop_iterations; ++i) {
         Node* node = root;
         
         // Selection
