@@ -50,11 +50,11 @@ private:
     int num_threads;
     NodePool memory_pool;
     
-    std::mt19937 main_eng; 
-    std::vector<std::mt19937> sim_engines; 
+    std::mt19937 main_eng;  // single random engine, for expansion step
+    std::vector<std::mt19937> sim_engines; // random engine for each thread in the simulation step
 
 public:
-    LeafParallelAgent(int sims, int threads, size_t pool_size = 200000)
+    LeafParallelAgent(int sims, int threads, size_t pool_size = 100000)
         : name("Leaf"), simulations(sims), num_threads(threads), memory_pool(pool_size), main_eng(std::random_device{}()) 
     {
         std::random_device rd;
@@ -69,3 +69,32 @@ public:
     int get_simulations() const override { return simulations; }
     int get_num_threads() const override { return num_threads; }
 };
+
+/* Root */
+class RootParallelAgent : public Agent {
+    private:
+        std::string name;
+        int simulations;
+        int num_threads;
+        
+        // each thread manages its own memory pool and random engine
+        std::vector<NodePool> memory_pools;
+        std::vector<std::mt19937> thread_engines;
+    
+    public:
+        RootParallelAgent(int sims, int threads, size_t pool_size_per_thread = 100000)
+            : name("Root"), simulations(sims), num_threads(threads) 
+        {
+            std::random_device rd;
+            for (int i = 0; i < num_threads; ++i) {
+                memory_pools.emplace_back(pool_size_per_thread);
+                thread_engines.emplace_back(rd());
+            }
+        }
+    
+        Action next_action(const State& root_state) override;
+        
+        std::string get_name() const override { return name; }
+        int get_simulations() const override { return simulations; }
+        int get_num_threads() const override { return num_threads; }
+    };

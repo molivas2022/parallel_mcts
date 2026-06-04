@@ -7,7 +7,8 @@
 
 enum class AgentType {
     Sequential,
-    LeafParallel
+    LeafParallel,
+    RootParallel
 };
 
 struct ExperimentConfig {

@@ -61,11 +61,14 @@ ExperimentResult run_experiment(const ExperimentConfig& config,
                                 const std::vector<ExperimentResult>& past_results, 
                                 int config_num, int total_configs) {
     
+    // Factory                               
     std::unique_ptr<Agent> test_agent;
     if (config.type == AgentType::Sequential) {
         test_agent = std::make_unique<SequentialAgent>(config.simulations);
     } else if (config.type == AgentType::LeafParallel) {
         test_agent = std::make_unique<LeafParallelAgent>(config.simulations, config.num_threads);
+    } else if (config.type == AgentType::RootParallel) {
+        test_agent = std::make_unique<RootParallelAgent>(config.simulations, config.num_threads);
     }
 
     int test_wins = 0;
