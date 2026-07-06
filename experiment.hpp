@@ -8,7 +8,9 @@
 enum class AgentType {
     Sequential,
     LeafParallel,
-    RootParallel
+    RootParallel,
+    LockFreeParallel
+    // VirtualLossTreeParallel
 };
 
 struct ExperimentConfig {

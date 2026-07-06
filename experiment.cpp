@@ -69,6 +69,10 @@ ExperimentResult run_experiment(const ExperimentConfig& config,
         test_agent = std::make_unique<LeafParallelAgent>(config.simulations, config.num_threads);
     } else if (config.type == AgentType::RootParallel) {
         test_agent = std::make_unique<RootParallelAgent>(config.simulations, config.num_threads);
+    } else if (config.type == AgentType::LockFreeParallel) {
+        test_agent = std::make_unique<LockFreeParallelAgent>(config.simulations, config.num_threads);
+    // } else if (config.type == AgentType::VirtualLossTreeParallel) {
+    //     test_agent = std::make_unique<VirtualLossParallelAgent>(config.simulations, config.num_threads);
     }
 
     int test_wins = 0;
