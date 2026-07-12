@@ -29,6 +29,9 @@ constexpr u N = 13;
 constexpr u PADDED_N = N + 2;
 constexpr u BOARD_SIZE = PADDED_N * PADDED_N;
 
+// Special action index to represent the Pie Rule Swap
+constexpr u SWAP_MOVE = 255;
+
 /* Helpers */
 
 constexpr std::array<u, 6> NEIGHBOR_OFFSETS = {
