@@ -82,4 +82,6 @@ obj/
 # results
 hex_results.csv
 results.csv
+results_raw.csv
+results_summary.csv
 comments.md
