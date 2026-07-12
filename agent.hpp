@@ -7,6 +7,7 @@
 #include <random>
 #include <vector>
 #include <utility>
+#include <thread>
 
 /* Base interface */
 
@@ -146,6 +147,25 @@ private:
 public:
     VirtualLossParallelAgent(int sims, int threads, size_t pool_size = 100000);
     ~VirtualLossParallelAgent() override;
+
+    Action next_action(const State& root_state) override;
+    
+    std::string get_name() const override { return name; }
+    int get_simulations() const override { return simulations; }
+    int get_num_threads() const override { return num_threads; }
+};
+
+/* WU-UCT (OpenMP Task Pipeline) */
+class WuUctParallelAgent : public Agent {
+private:
+    std::string name;
+    int simulations;
+    int num_threads;
+    void* memory_pool_ptr; 
+
+public:
+    WuUctParallelAgent(int sims, int threads, size_t pool_size = 100000);
+    ~WuUctParallelAgent() override;
 
     Action next_action(const State& root_state) override;
     

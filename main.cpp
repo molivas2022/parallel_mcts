@@ -13,7 +13,8 @@ int main() {
         // {AgentType::LeafParallel, sims, 4},
         // {AgentType::RootParallel, sims, 4},
         // {AgentType::LockFree, sims, 4},
-        // {AgentType::VirtualLoss, sims, 4}
+        // {AgentType::VirtualLoss, sims, 4},
+        {AgentType::WuUct, sims, 4}
     };
 
     std::vector<ExperimentResult> all_results;

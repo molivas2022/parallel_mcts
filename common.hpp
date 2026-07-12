@@ -25,7 +25,7 @@ using u = std::uint8_t; // max board size: N = 13
 
 enum class Player : u { None, First, Second };
 
-constexpr u N = 9;
+constexpr u N = 11;
 constexpr u PADDED_N = N + 2;
 constexpr u BOARD_SIZE = PADDED_N * PADDED_N;
 
