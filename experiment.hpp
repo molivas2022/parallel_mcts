@@ -12,6 +12,7 @@
 
 #include <string>
 #include <vector>
+#include <array>
 
 enum class AgentType {
     Sequential,
