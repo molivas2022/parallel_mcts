@@ -61,18 +61,17 @@ ExperimentResult run_experiment(const ExperimentConfig& config,
                                 const std::vector<ExperimentResult>& past_results, 
                                 int config_num, int total_configs) {
     
-    // Factory                               
     std::unique_ptr<Agent> test_agent;
     if (config.type == AgentType::Sequential) {
         test_agent = std::make_unique<SequentialAgent>(config.simulations);
-    } else if (config.type == AgentType::LeafParallel) {
+    } else if (config.type == AgentType::Leaf) {
         test_agent = std::make_unique<LeafParallelAgent>(config.simulations, config.num_threads);
-    } else if (config.type == AgentType::RootParallel) {
+    } else if (config.type == AgentType::Root) {
         test_agent = std::make_unique<RootParallelAgent>(config.simulations, config.num_threads);
-    } else if (config.type == AgentType::LockFreeParallel) {
+    } else if (config.type == AgentType::LockFree) {
         test_agent = std::make_unique<LockFreeParallelAgent>(config.simulations, config.num_threads);
-    // } else if (config.type == AgentType::VirtualLossTreeParallel) {
-    //     test_agent = std::make_unique<VirtualLossParallelAgent>(config.simulations, config.num_threads);
+    } else if (config.type == AgentType::VirtualLoss) {
+        test_agent = std::make_unique<VirtualLossParallelAgent>(config.simulations, config.num_threads);
     }
 
     int test_wins = 0;
@@ -141,7 +140,7 @@ void save_to_csv(const ExperimentResult& r, bool is_first) {
     std::ofstream file("results.csv", is_first ? std::ios::trunc : std::ios::app);
     if (file.is_open()) {
         if (is_first) {
-            file << "N,Matches,Agent,Sims,Threads,Winrate,AvgTurns,MCTS_Time_Seconds\n";
+            file << "N,Matches,Agent,Sims,Threads,Winrate,AvgTurns,Total_Time_Seconds\n";
         }
         file << r.n_size << "," << r.matches << "," 
              << r.agent_name << "," << r.simulations << "," << r.num_threads << ","
@@ -156,18 +155,20 @@ void print_final_summary(const std::vector<ExperimentResult>& all_results) {
     std::cout << "All experiments completed!\n\n";
 
     std::cout << std::left 
-              << std::setw(5)  << "N" 
+              << std::setw(5)  << "N"
+              << std::setw(10) << "Matches"
               << std::setw(15) << "Agent"
               << std::setw(10) << "Sims"
               << std::setw(10) << "Threads"
               << std::setw(12) << "Winrate" 
               << std::setw(12) << "Avg Turns" 
-              << std::setw(12) << "MCTS Time(s)" << "\n";
-    std::cout << std::string(76, '-') << "\n";
+              << std::setw(12) << "Total Time" << "\n";
+    std::cout << std::string(84, '-') << "\n";
 
     for (const auto& r : all_results) {
         std::cout << std::left 
                   << std::setw(5)  << r.n_size 
+                  << std::setw(10) << r.matches
                   << std::setw(15) << r.agent_name
                   << std::setw(10) << r.simulations
                   << std::setw(10) << r.num_threads

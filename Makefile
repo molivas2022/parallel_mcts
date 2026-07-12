@@ -1,6 +1,6 @@
 # Compiler settings
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -O3 -march=native -flto -fopenmp
+CXXFLAGS = -std=c++20 -Wall -Wextra -O3 -march=native -flto -fopenmp
 
 # Executable name
 TARGET = main
