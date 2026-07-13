@@ -4,7 +4,7 @@
 #include <omp.h>
 #include <array>
 
-Action RootParallelAgent::next_action(const State& root_state) {
+std::array<int, u_SIZE> RootParallelAgent::get_visit_counts(const State& root_state) {
     int loop_iterations = simulations / num_threads;
     
     // Root node of each tree
@@ -89,18 +89,6 @@ Action RootParallelAgent::next_action(const State& root_state) {
             total_visits[child->action.move_idx] += child->visits;
         }
     }
-
-    // Selection of the most visited move
-    Action best_action{0};
-    int max_visits = -1;
-
-    // Iterate using a standard int to prevent uint8_t overflow loop (255 + 1 -> 0)
-    for (int i = 0; i < u_SIZE; ++i) { 
-        if (total_visits[i] > max_visits) {
-            max_visits = total_visits[i];
-            best_action = Action{static_cast<u>(i)};
-        }
-    }
     
-    return best_action;
+    return total_visits;
 }

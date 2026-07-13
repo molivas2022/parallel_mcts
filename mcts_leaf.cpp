@@ -3,7 +3,7 @@
 #include <cmath>
 #include <omp.h>
 
-Action LeafParallelAgent::next_action(const State& root_state) {
+std::array<int, u_SIZE> LeafParallelAgent::get_visit_counts(const State& root_state) {
     memory_pool.reset();
     Node* root = memory_pool.allocate(root_state, nullptr, Action{0});
 
@@ -84,13 +84,12 @@ Action LeafParallelAgent::next_action(const State& root_state) {
         }
     }
     
-    Action best_action{0};
-    int max_visits = -1;
-    for (Node* child : root->children) {
-        if (child->visits > max_visits) {
-            max_visits = child->visits;
-            best_action = child->action;
-        }
+    std::array<int, u_SIZE> total_visits;
+    total_visits.fill(0);
+    
+    for (auto* child : root->children) {
+        total_visits[child->action.move_idx] = child->visits; 
     }
-    return best_action;
+    
+    return total_visits;
 }

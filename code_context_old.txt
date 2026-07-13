@@ -1,0 +1,2356 @@
+================================================================================
+File: mcts_concurrent.hpp
+================================================================================
+/*
+ * Module: Concurrent MCTS Data Structures
+ *
+ * This file defines isolated, thread-safe data structures (ConcurrentNode and
+ * ConcurrentNodePool) specifically for Tree Parallelization strategies. 
+ * By keeping these distinct from the base Node structures, we avoid injecting 
+ * atomic operations and memory bloat (like OpenMP locks) into the baseline 
+ * Sequential, Leaf, and Root parallel agents, preserving their pure performance 
+ * characteristics for accurate benchmarking.
+ *
+ * Constraints:
+ * - Requires OpenMP for node-level structural locking.
+ * - Nodes pre-allocate and initialize their locks to avoid data races during
+ * tree expansion, trading slightly slower allocation for runtime safety.
+ */
+
+#pragma once
+
+#include "common.hpp"
+#include "env.hpp"
+
+#include <vector>
+#include <atomic>
+#include <iostream>
+#include <omp.h>
+
+/* Concurrent Node */
+
+struct ConcurrentNode {
+    State state;
+    ConcurrentNode* parent;
+    Action action;
+
+    std::vector<ConcurrentNode*> children;
+    
+    // Statistics are atomic to allow lock-free Backpropagation and Virtual Loss
+    std::atomic<int> visits;
+    std::atomic<double> wins; 
+    
+    ActionSpace untried_space;
+    
+    // Lightweight spinlock strictly used to protect structural modifications
+    // (e.g., popping from untried_space and pushing to children)
+    omp_lock_t lock;
+
+    ConcurrentNode() {
+        omp_init_lock(&lock);
+        visits.store(0, std::memory_order_relaxed);
+        wins.store(0.0, std::memory_order_relaxed);
+    }
+    
+    ~ConcurrentNode() {
+        omp_destroy_lock(&lock);
+    }
+
+    // Disable copy/move semantics to prevent accidental lock duplication
+    ConcurrentNode(const ConcurrentNode&) = delete;
+    ConcurrentNode& operator=(const ConcurrentNode&) = delete;
+};
+
+/* Concurrent Memory Pool */
+
+struct ConcurrentNodePool {
+    std::vector<ConcurrentNode> pool;
+    
+    // Atomic cursor ensures threads can reserve memory blocks simultaneously
+    // without returning the same pointer to multiple threads.
+    std::atomic<int> cursor;
+
+    ConcurrentNodePool(size_t capacity) {
+        pool = std::vector<ConcurrentNode>(capacity);
+        cursor.store(0, std::memory_order_relaxed);
+    }
+    
+    void reset() {
+        cursor.store(0, std::memory_order_relaxed); 
+    }
+
+    ConcurrentNode* allocate(const State& s, ConcurrentNode* p, Action a) {
+        // memory_order_relaxed is sufficient here because the atomic operation 
+        // only needs to guarantee a unique index, not cross-thread memory synchronization
+        int idx = cursor.fetch_add(1, std::memory_order_relaxed);
+        
+        if (static_cast<size_t>(idx) >= pool.size()) {
+            std::cerr << "CRITICAL ERROR: Concurrent Node pool exhausted!\n";
+            exit(1);
+        }
+
+        ConcurrentNode* n = &pool[idx];
+        
+        n->state = s;
+        n->parent = p;
+        n->action = a;
+        n->visits.store(0, std::memory_order_relaxed);
+        n->wins.store(0.0, std::memory_order_relaxed);
+        n->children.clear(); 
+        n->untried_space = get_actions(s);
+        
+        return n;
+    }
+};
+
+================================================================================
+File: agent.hpp
+================================================================================
+#pragma once
+
+#include "env.hpp"
+#include "mcts_common.hpp"
+
+#include <string>
+#include <random>
+#include <vector>
+#include <utility>
+#include <thread>
+
+/* Base interface */
+
+class Agent {
+public:
+    virtual ~Agent() = default;
+    
+    virtual Action next_action(const State& state) = 0;
+    
+    virtual std::string get_name() const = 0;
+    virtual int get_simulations() const = 0;
+    virtual int get_num_threads() const = 0;
+};
+
+/* Concrete implementations */
+
+/* Sequential */
+class SequentialAgent : public Agent {
+private:
+    std::string name;
+    int simulations;
+    NodePool memory_pool;
+    std::mt19937 eng;
+
+public:
+    SequentialAgent(int sims, size_t pool_size = 100000)
+        : name("Sequential"), simulations(sims), memory_pool(pool_size), eng(std::random_device{}()) {}
+
+    Action next_action(const State& root_state) override;
+    
+    std::string get_name() const override { return name; }
+    int get_simulations() const override { return simulations; }
+    int get_num_threads() const override { return 1; }
+};
+
+/* Leaf */
+class LeafParallelAgent : public Agent {
+private:
+    std::string name;
+    int simulations;
+    int num_threads;
+    NodePool memory_pool;
+    
+    std::mt19937 main_eng;  // single random engine, for expansion step
+    std::vector<std::mt19937> sim_engines; // random engine for each thread in the simulation step
+
+public:
+    LeafParallelAgent(int sims, int threads, size_t pool_size = 100000)
+        : name("Leaf"), simulations(sims), num_threads(threads), memory_pool(pool_size), main_eng(std::random_device{}()) 
+    {
+        std::random_device rd;
+        for (int i = 0; i < num_threads; ++i) {
+            sim_engines.emplace_back(rd());
+        }
+    }
+
+    Action next_action(const State& root_state) override;
+    
+    std::string get_name() const override { return name; }
+    int get_simulations() const override { return simulations; }
+    int get_num_threads() const override { return num_threads; }
+};
+
+/* Root */
+class RootParallelAgent : public Agent {
+private:
+    std::string name;
+    int simulations;
+    int num_threads;
+    
+    // each thread manages its own memory pool and random engine
+    std::vector<NodePool> memory_pools;
+    std::vector<std::mt19937> thread_engines;
+
+public:
+    RootParallelAgent(int sims, int threads, size_t pool_size_per_thread = 100000)
+        : name("Root"), simulations(sims), num_threads(threads) 
+    {
+        std::random_device rd;
+        for (int i = 0; i < num_threads; ++i) {
+            memory_pools.emplace_back(pool_size_per_thread);
+            thread_engines.emplace_back(rd());
+        }
+    }
+
+    Action next_action(const State& root_state) override;
+    
+    std::string get_name() const override { return name; }
+    int get_simulations() const override { return simulations; }
+    int get_num_threads() const override { return num_threads; }
+};
+
+/* * Note: The following agents utilize the ConcurrentNodePool defined in 
+* mcts_concurrent.hpp. We forward-declare or use opaque pointers where 
+* necessary to avoid polluting this main header, but for simplicity in 
+* this benchmark suite, we will just rely on the implementation files 
+* to handle the heavy concurrent includes.
+*/
+
+class ConcurrentNodePool; // Forward declaration
+
+/* Lock-Free */
+class LockFreeParallelAgent : public Agent {
+private:
+    std::string name;
+    int simulations;
+    int num_threads;
+    
+    // Using a void* here to avoid including mcts_concurrent.hpp in the main header,
+    // preserving compilation speed and isolating the OpenMP/Atomic bloat.
+    // It will be cast to ConcurrentNodePool* in the cpp file.
+    void* memory_pool_ptr; 
+    
+    std::vector<std::mt19937> thread_engines;
+
+public:
+    LockFreeParallelAgent(int sims, int threads, size_t pool_size = 100000);
+    ~LockFreeParallelAgent() override;
+
+    Action next_action(const State& root_state) override;
+    
+    std::string get_name() const override { return name; }
+    int get_simulations() const override { return simulations; }
+    int get_num_threads() const override { return num_threads; }
+};
+
+/* Virtual Loss */
+class VirtualLossParallelAgent : public Agent {
+private:
+    std::string name;
+    int simulations;
+    int num_threads;
+    
+    void* memory_pool_ptr; 
+    std::vector<std::mt19937> thread_engines;
+
+public:
+    VirtualLossParallelAgent(int sims, int threads, size_t pool_size = 100000);
+    ~VirtualLossParallelAgent() override;
+
+    Action next_action(const State& root_state) override;
+    
+    std::string get_name() const override { return name; }
+    int get_simulations() const override { return simulations; }
+    int get_num_threads() const override { return num_threads; }
+};
+
+/* WU-UCT (OpenMP Task Pipeline) */
+class WuUctParallelAgent : public Agent {
+private:
+    std::string name;
+    int simulations;
+    int num_threads;
+    void* memory_pool_ptr; 
+
+public:
+    WuUctParallelAgent(int sims, int threads, size_t pool_size = 100000);
+    ~WuUctParallelAgent() override;
+
+    Action next_action(const State& root_state) override;
+    
+    std::string get_name() const override { return name; }
+    int get_simulations() const override { return simulations; }
+    int get_num_threads() const override { return num_threads; }
+};
+
+================================================================================
+File: mcts_concurrent.cpp
+================================================================================
+/*
+ * Module: Concurrent MCTS Data Structures
+ *
+ * This file defines isolated, thread-safe data structures (ConcurrentNode and
+ * ConcurrentNodePool) specifically for Tree Parallelization strategies. 
+ * By keeping these distinct from the base Node structures, we avoid injecting 
+ * atomic operations and memory bloat (like OpenMP locks) into the baseline 
+ * Sequential, Leaf, and Root parallel agents, preserving their pure performance 
+ * characteristics for accurate benchmarking.
+ *
+ * Constraints:
+ * - Requires OpenMP for node-level structural locking.
+ * - Nodes pre-allocate and initialize their locks to avoid data races during
+ * tree expansion, trading slightly slower allocation for runtime safety.
+ */
+
+#pragma once
+
+#include "common.hpp"
+#include "env.hpp"
+
+#include <vector>
+#include <atomic>
+#include <iostream>
+#include <omp.h>
+
+/* Concurrent Node */
+
+struct ConcurrentNode {
+    State state;
+    ConcurrentNode* parent;
+    Action action;
+
+    std::vector<ConcurrentNode*> children;
+    
+    // Statistics are atomic to allow lock-free Backpropagation and Virtual Loss
+    std::atomic<int> visits;
+    std::atomic<double> wins; 
+    
+    ActionSpace untried_space;
+    
+    // Lightweight spinlock strictly used to protect structural modifications
+    // (e.g., popping from untried_space and pushing to children)
+    omp_lock_t lock;
+
+    ConcurrentNode() {
+        omp_init_lock(&lock);
+        visits.store(0, std::memory_order_relaxed);
+        wins.store(0.0, std::memory_order_relaxed);
+    }
+    
+    ~ConcurrentNode() {
+        omp_destroy_lock(&lock);
+    }
+
+    // Disable copy/move semantics to prevent accidental lock duplication
+    ConcurrentNode(const ConcurrentNode&) = delete;
+    ConcurrentNode& operator=(const ConcurrentNode&) = delete;
+};
+
+/* Concurrent Memory Pool */
+
+struct ConcurrentNodePool {
+    std::vector<ConcurrentNode> pool;
+    
+    // Atomic cursor ensures threads can reserve memory blocks simultaneously
+    // without returning the same pointer to multiple threads.
+    std::atomic<int> cursor;
+
+    ConcurrentNodePool(size_t capacity) {
+        pool = std::vector<ConcurrentNode>(capacity);
+        cursor.store(0, std::memory_order_relaxed);
+    }
+    
+    void reset() {
+        cursor.store(0, std::memory_order_relaxed); 
+    }
+
+    ConcurrentNode* allocate(const State& s, ConcurrentNode* p, Action a) {
+        // memory_order_relaxed is sufficient here because the atomic operation 
+        // only needs to guarantee a unique index, not cross-thread memory synchronization
+        int idx = cursor.fetch_add(1, std::memory_order_relaxed);
+        
+        if (static_cast<size_t>(idx) >= pool.size()) {
+            std::cerr << "CRITICAL ERROR: Concurrent Node pool exhausted!\n";
+            exit(1);
+        }
+
+        ConcurrentNode* n = &pool[idx];
+        
+        n->state = s;
+        n->parent = p;
+        n->action = a;
+        n->visits.store(0, std::memory_order_relaxed);
+        n->wins.store(0.0, std::memory_order_relaxed);
+        n->children.clear(); 
+        n->untried_space = get_actions(s);
+
+        // Pre-allocate vector capacity to prevent concurrent push_back reallocation
+        n->children.reserve(n->untried_space.count);
+         
+        return n;
+    }
+};
+
+================================================================================
+File: README.md
+================================================================================
+# parallel_mcts
+
+================================================================================
+File: env.hpp
+================================================================================
+#pragma once
+
+#include <array>
+#include "common.hpp"
+#include "dsu.hpp"
+
+/* Model */
+
+struct State {
+    Player turn;
+    Player winner;
+    std::array<Player, BOARD_SIZE> board;
+    DSU dsu; 
+};
+
+struct Action {
+    u move_idx;
+};
+
+struct ActionSpace {
+    std::array<Action, N * N> actions;
+    u count = 0;
+};
+
+State create_initial_state();
+ActionSpace get_actions(const State& state);
+void next_state(State& state, Action action);
+
+================================================================================
+File: mcts_wu.cpp
+================================================================================
+/*
+ * Module: WU-UCT MCTS Agent (OpenMP Task Parallelization)
+ *
+ * This implements the Pipeline architecture using OpenMP Tasking. 
+ * An OpenMP parallel region wakes up a team of threads. A single Master 
+ * thread traverses the MCTS tree, performing Selection and Expansion safely
+ * without locks. 
+ * 
+ * It tracks unobserved samples (O_s) to retain exploration diversity. 
+ * When a node is expanded, the Master spawns an OpenMP task. The OpenMP 
+ * runtime automatically distributes these simulation tasks to the idle 
+ * worker threads in the team, which asynchronously execute the rollout 
+ * and perform the Complete Update via atomic operations.
+ */
+
+#include "agent.hpp"
+#include "mcts_wu.hpp"
+
+#include <cmath>
+#include <random>
+#include <omp.h>
+
+WuUctParallelAgent::WuUctParallelAgent(int sims, int threads, size_t pool_size)
+    : name("WuUct"), simulations(sims), num_threads(threads) 
+{
+    memory_pool_ptr = new WuNodePool(pool_size);
+}
+
+WuUctParallelAgent::~WuUctParallelAgent() {
+    delete static_cast<WuNodePool*>(memory_pool_ptr);
+}
+
+Action WuUctParallelAgent::next_action(const State& root_state) {
+    auto* pool = static_cast<WuNodePool*>(memory_pool_ptr);
+    pool->reset();
+    WuNode* root = pool->allocate(root_state, nullptr, Action{0});
+
+    // Wake up the team of threads
+    #pragma omp parallel num_threads(num_threads)
+    {
+        // Restrict tree traversal to a single Master thread
+        #pragma omp single
+        {
+            std::mt19937 master_eng(std::random_device{}());
+
+            for (int i = 0; i < simulations; ++i) {
+                WuNode* node = root;
+                
+                // 1. Selection (Master Only)
+                while (node->untried_space.count == 0 && !node->children.empty()) {
+                    WuNode* best_child = nullptr;
+                    double best_score = -1.0;
+                    
+                    int parent_visits = node->visits.load(std::memory_order_relaxed);
+                    int parent_unobs = node->unobserved.load(std::memory_order_relaxed);
+                    int parent_total = parent_visits + parent_unobs;
+                    
+                    for (WuNode* child : node->children) {
+                        int child_visits = child->visits.load(std::memory_order_relaxed);
+                        int child_unobs = child->unobserved.load(std::memory_order_relaxed);
+                        int child_total = child_visits + child_unobs;
+                        
+                        if (child_total == 0) {
+                            best_child = child;
+                            break; 
+                        }
+                        
+                        double child_wins = child->wins.load(std::memory_order_relaxed);
+                        double exploit = child_visits > 0 ? (child_wins / child_visits) : 0.0;
+                        double explore = 1.414 * std::sqrt(std::log(parent_total) / child_total);
+                        double score = exploit + explore;
+                        
+                        if (score > best_score) {
+                            best_score = score;
+                            best_child = child;
+                        }
+                    }
+                    node = best_child;
+                }
+                
+                // 2. Expansion (Master Only)
+                if (node->untried_space.count > 0 && node->state.winner == Player::None) {
+                    std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
+                    int idx = dist(master_eng); 
+                    Action action = node->untried_space.actions[idx];
+                    
+                    node->untried_space.actions[idx] = node->untried_space.actions[node->untried_space.count - 1];
+                    node->untried_space.count--;
+                    
+                    State next_s = node->state;
+                    next_state(next_s, action);
+                    
+                    WuNode* child = pool->allocate(next_s, node, action);
+                    node->children.push_back(child);
+                    node = child;
+                }
+                
+                // 3. Incomplete Update (Master Only)
+                WuNode* curr_inc = node;
+                while (curr_inc != nullptr) {
+                    curr_inc->unobserved.fetch_add(1, std::memory_order_relaxed);
+                    curr_inc = curr_inc->parent;
+                }
+                
+                // 4. Dispatch Simulation Task to Workers
+                // firstprivate(node) safely passes the pointer to the async task
+                #pragma omp task firstprivate(node)
+                {
+                    std::mt19937 task_eng(std::random_device{}());
+                    State sim_state = node->state;
+                    
+                    // Simulation Phase (Heavy workload executed by workers)
+                    while (sim_state.winner == Player::None) {
+                        ActionSpace space = get_actions(sim_state);
+                        if (space.count == 0) break;
+                        std::uniform_int_distribution<int> dist(0, space.count - 1);
+                        next_state(sim_state, space.actions[dist(task_eng)]);
+                    }
+                    Player winner = sim_state.winner;
+                    
+                    // Complete Update (Backpropagation executed by workers)
+                    WuNode* curr_comp = node;
+                    while (curr_comp != nullptr) {
+                        curr_comp->unobserved.fetch_sub(1, std::memory_order_relaxed);
+                        curr_comp->visits.fetch_add(1, std::memory_order_relaxed);
+                        
+                        if (curr_comp->parent != nullptr && winner == curr_comp->parent->state.turn) {
+                            // C++17 safe atomic double addition via CAS
+                            double current_wins = curr_comp->wins.load(std::memory_order_relaxed);
+                            while (!curr_comp->wins.compare_exchange_weak(current_wins, current_wins + 1.0, 
+                                                                          std::memory_order_relaxed, 
+                                                                          std::memory_order_relaxed)) {}
+                        }
+                        curr_comp = curr_comp->parent;
+                    }
+                } // End of task
+            }
+            
+            // Wait for all dispatched simulation tasks to complete before choosing a move
+            #pragma omp taskwait
+        } // End of single Master thread
+    } // End of parallel region
+    
+    // Select best move
+    Action best_action{0};
+    int max_visits = -1;
+    for (WuNode* child : root->children) {
+        int child_visits = child->visits.load(std::memory_order_relaxed);
+        if (child_visits > max_visits) {
+            max_visits = child_visits;
+            best_action = child->action;
+        }
+    }
+    return best_action;
+}
+
+================================================================================
+File: common.hpp
+================================================================================
+/*
+Used representation: pointy-top
+Example of 3x3 grid:
+     / \
+    |0,0|
+   / \ / \
+  |1,0|0,1|
+ / \ / \ / \
+|2,0|1,1|0,2|
+ \ / \ / \ /
+  |2,1|1,2|
+   \ / \ /
+    |2,2|
+     \ /
+*/
+
+#pragma once
+
+#include <cstdint>
+#include <array>
+
+/* Constants */
+
+using u = std::uint8_t; // max board size: N = 13
+
+enum class Player : u { None, First, Second };
+
+constexpr u N = 11;
+constexpr u PADDED_N = N + 2;
+constexpr u BOARD_SIZE = PADDED_N * PADDED_N;
+
+// Special action index to represent the Pie Rule Swap
+constexpr u SWAP_MOVE = 255;
+
+/* Helpers */
+
+constexpr std::array<u, 6> NEIGHBOR_OFFSETS = {
+    static_cast<u>(-1),             // up left      (0, -1)
+    static_cast<u>(-PADDED_N),      // up right     (-1, 0)
+    static_cast<u>(PADDED_N - 1),   // left         (1, -1)
+    static_cast<u>(-PADDED_N + 1),  // right        (-1, 1)
+    static_cast<u>(PADDED_N),       // down left    (1, 0)
+    static_cast<u>(1)               // down right   (0, 1)
+};
+
+================================================================================
+File: mcts_wu.hpp
+================================================================================
+/*
+ * Module: WU-UCT Data Structures
+ *
+ * This file defines isolated data structures designed exclusively for the 
+ * OpenMP Task-Based Pipeline architecture (WU-UCT).
+ *
+ * Because a single Master thread exclusively performs Selection and Expansion,
+ * the tree topology (children vectors, untried spaces) is structurally safe 
+ * and requires ZERO locks. However, because OpenMP worker tasks asynchronously 
+ * perform Backpropagation, the node statistics (visits, wins, unobserved) 
+ * must be atomic to prevent data races.
+ */
+
+#pragma once
+
+#include "common.hpp"
+#include "env.hpp"
+
+#include <vector>
+#include <atomic>
+#include <iostream>
+
+struct WuNode {
+    State state;
+    WuNode* parent;
+    Action action;
+
+    std::vector<WuNode*> children;
+    
+    // Statistics updated asynchronously by OpenMP tasks
+    std::atomic<int> visits;
+    std::atomic<double> wins; 
+    
+    // Unobserved samples tracker (on-going incomplete simulation queries)
+    std::atomic<int> unobserved; 
+    
+    ActionSpace untried_space;
+
+    WuNode() {
+        visits.store(0, std::memory_order_relaxed);
+        wins.store(0.0, std::memory_order_relaxed);
+        unobserved.store(0, std::memory_order_relaxed);
+    }
+    
+    // Disable copy/move to prevent atomic state corruption
+    WuNode(const WuNode&) = delete;
+    WuNode& operator=(const WuNode&) = delete;
+};
+
+struct WuNodePool {
+    std::vector<WuNode> pool;
+    std::atomic<int> cursor;
+
+    WuNodePool(size_t capacity) {
+        pool = std::vector<WuNode>(capacity);
+        cursor.store(0, std::memory_order_relaxed);
+    }
+    
+    void reset() {
+        cursor.store(0, std::memory_order_relaxed); 
+    }
+
+    WuNode* allocate(const State& s, WuNode* p, Action a) {
+        int idx = cursor.fetch_add(1, std::memory_order_relaxed);
+        
+        if (static_cast<size_t>(idx) >= pool.size()) {
+            std::cerr << "CRITICAL ERROR: WU-MCTS Node pool exhausted!\n";
+            exit(1);
+        }
+
+        WuNode* n = &pool[idx];
+        n->state = s;
+        n->parent = p;
+        n->action = a;
+        n->visits.store(0, std::memory_order_relaxed);
+        n->wins.store(0.0, std::memory_order_relaxed);
+        n->unobserved.store(0, std::memory_order_relaxed);
+        n->children.clear(); 
+        n->untried_space = get_actions(s);
+        
+        // Reserve capacity to prevent vector reallocation
+        n->children.reserve(n->untried_space.count);
+        
+        return n;
+    }
+};
+
+================================================================================
+File: mcts_common.hpp
+================================================================================
+#pragma once
+
+#include "common.hpp"
+#include "env.hpp"
+
+#include <vector>
+#include <functional>
+
+/* Auxiliar structures */
+
+struct Node {
+    State state;
+    Node* parent;
+    Action action;
+
+    std::vector<Node*> children;
+    int visits;
+    double wins; 
+    ActionSpace untried_space;
+
+    Node() = default; 
+};
+
+/* Memory Pool */
+
+struct NodePool {
+    std::vector<Node> pool;
+    int cursor;
+
+    NodePool(size_t capacity);
+    
+    void reset();
+    Node* allocate(const State& s, Node* p, Action a);
+};
+
+================================================================================
+File: Makefile
+================================================================================
+# Compiler settings
+CXX = g++
+CXXFLAGS = -std=c++20 -Wall -Wextra -O3 -march=native -flto -fopenmp
+
+# Executable name
+TARGET = main
+
+# Directories
+OBJDIR = obj
+
+# Files
+SRCS = $(wildcard *.cpp)
+
+# Pattern substitution: replaces .cpp with obj/.o and obj/.d
+OBJS = $(patsubst %.cpp, $(OBJDIR)/%.o, $(SRCS))
+DEPS = $(patsubst %.cpp, $(OBJDIR)/%.d, $(SRCS))
+
+# Default target
+all: $(TARGET)
+
+# Linking the final executable
+$(TARGET): $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+# Compiling individual source files
+# @mkdir -p $(@D) ensures the target directory exists before compiling
+$(OBJDIR)/%.o: %.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+# Run the simulation
+run: $(TARGET)
+	./$(TARGET)
+
+# Clean up build artifacts
+clean:
+	rm -rf $(OBJDIR) $(TARGET)
+
+# Include the auto-generated dependency files
+-include $(DEPS)
+
+# Mark targets that don't represent physical files
+.PHONY: all clean run
+
+================================================================================
+File: env.cpp
+================================================================================
+#include "env.hpp"
+
+State create_initial_state() {
+    State s;
+    s.turn = Player::First;
+    s.winner = Player::None;
+    s.board.fill(Player::None); 
+    s.dsu.init();
+
+    for (u i = 1; i <= N; ++i) {
+        s.board[0 * PADDED_N + i] = Player::First;
+        s.board[(N + 1) * PADDED_N + i] = Player::First;
+        s.dsu.unite(0 * PADDED_N + 1, 0 * PADDED_N + i);
+        s.dsu.unite((N + 1) * PADDED_N + 1, (N + 1) * PADDED_N + i);
+
+        s.board[i * PADDED_N + 0] = Player::Second;
+        s.board[i * PADDED_N + (N + 1)] = Player::Second;
+        s.dsu.unite(1 * PADDED_N + 0, i * PADDED_N + 0);
+        s.dsu.unite(1 * PADDED_N + (N + 1), i * PADDED_N + (N + 1));
+    }
+    return s;
+}
+
+ActionSpace get_actions(const State& state) {
+    ActionSpace space;
+    for (u r = 1; r <= N; ++r) {
+        for (u c = 1; c <= N; ++c) {
+            u i = r * PADDED_N + c;
+            if (state.board[i] == Player::None) {
+                space.actions[space.count++] = Action{i};
+            }
+        }
+    }
+    
+    // The Swap rule is only available on exactly Turn 2.
+    // If exactly 1 stone has been played, the number of empty spaces is N*N - 1.
+    if (space.count == N * N - 1) {
+        space.actions[space.count++] = Action{SWAP_MOVE};
+    }
+    
+    return space;
+}
+
+void next_state(State& state, Action action) {
+    // Intercept and handle the Swap move
+    if (action.move_idx == SWAP_MOVE) {
+        u played_r = 0, played_c = 0;
+        
+        // 1. Find the single Player 1 stone on the board
+        for (u r = 1; r <= N; ++r) {
+            for (u c = 1; c <= N; ++c) {
+                if (state.board[r * PADDED_N + c] != Player::None) {
+                    played_r = r;
+                    played_c = c;
+                    break;
+                }
+            }
+            if (played_r != 0) break;
+        }
+        
+        // 2. Wipe the board clean
+        state = create_initial_state();
+        
+        // 3. Mirror the stone coordinates (r, c) -> (c, r) and place it as Player 2
+        u mirrored_idx = played_c * PADDED_N + played_r;
+        state.board[mirrored_idx] = Player::Second;
+        
+        // 4. Update the DSU connections for the newly placed stone
+        for (u offset : NEIGHBOR_OFFSETS) {
+            u neighbor = static_cast<u>(mirrored_idx + offset);
+            if (state.board[neighbor] == Player::Second) {
+                state.dsu.unite(mirrored_idx, neighbor);
+            }
+        }
+        
+        // 5. It becomes Player 1's turn (since Player 2 effectively just played)
+        state.turn = Player::First;
+        return;
+    }
+
+    // Standard move logic
+    Player current = state.turn;
+    
+    state.board[action.move_idx] = current;
+
+    for (u offset : NEIGHBOR_OFFSETS) {
+        u neighbor = static_cast<u>(action.move_idx + offset);
+        if (state.board[neighbor] == current) {
+            state.dsu.unite(action.move_idx, neighbor);
+        }
+    }
+    
+    if (current == Player::First) {
+        if (state.dsu.find(0 * PADDED_N + 1) == state.dsu.find((N + 1) * PADDED_N + 1)) 
+            state.winner = Player::First;
+    } else {
+        if (state.dsu.find(1 * PADDED_N + 0) == state.dsu.find(1 * PADDED_N + (N + 1))) 
+            state.winner = Player::Second;
+    }
+
+    state.turn = (state.turn == Player::First) ? Player::Second : Player::First;
+}
+
+================================================================================
+File: mcts_leaf.cpp
+================================================================================
+#include "agent.hpp"
+
+#include <cmath>
+#include <omp.h>
+
+Action LeafParallelAgent::next_action(const State& root_state) {
+    memory_pool.reset();
+    Node* root = memory_pool.allocate(root_state, nullptr, Action{0});
+
+    int loop_iterations = simulations / num_threads;
+
+    for (int i = 0; i < loop_iterations; ++i) {
+        Node* node = root;
+        
+        // Selection
+        while (node->untried_space.count == 0 && !node->children.empty()) {
+            Node* best_child = nullptr;
+            double best_score = -1.0;
+            for (Node* child : node->children) {
+                double exploit = child->wins / child->visits;
+                double explore = 1.414 * std::sqrt(std::log(node->visits) / child->visits);
+                double score = exploit + explore;
+                if (score > best_score) {
+                    best_score = score;
+                    best_child = child;
+                }
+            }
+            node = best_child;
+        }
+        
+        // Expansion
+        if (node->untried_space.count > 0 && node->state.winner == Player::None) {
+            std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
+            int idx = dist(main_eng); 
+            Action action = node->untried_space.actions[idx];
+            
+            node->untried_space.actions[idx] = node->untried_space.actions[node->untried_space.count - 1];
+            node->untried_space.count--;
+            
+            State next_s = node->state;
+            next_state(next_s, action);
+            
+            Node* child = memory_pool.allocate(next_s, node, action);
+            node->children.push_back(child);
+            node = child;
+        }
+        
+        // Simulation
+        int first_wins = 0;
+        int second_wins = 0;
+
+        #pragma omp parallel for num_threads(num_threads) reduction(+:first_wins, second_wins)
+        for (int p = 0; p < num_threads; ++p) {
+            int thread_id = omp_get_thread_num();
+            auto& sim_eng = sim_engines[thread_id]; 
+            
+            State sim_state = node->state;
+            while (sim_state.winner == Player::None) {
+                ActionSpace space = get_actions(sim_state);
+                if (space.count == 0) break;
+                std::uniform_int_distribution<int> dist(0, space.count - 1);
+                next_state(sim_state, space.actions[dist(sim_eng)]);
+            }
+            
+            if (sim_state.winner == Player::First) {
+                first_wins++;
+            } else if (sim_state.winner == Player::Second) {
+                second_wins++;
+            }
+        }
+        
+        // Backprop
+        Node* curr = node;
+        while (curr != nullptr) {
+            curr->visits += num_threads;
+            if (curr->parent != nullptr) {
+                if (curr->parent->state.turn == Player::First) {
+                    curr->wins += first_wins;
+                } else if (curr->parent->state.turn == Player::Second) {
+                    curr->wins += second_wins;
+                }
+            }
+            curr = curr->parent;
+        }
+    }
+    
+    Action best_action{0};
+    int max_visits = -1;
+    for (Node* child : root->children) {
+        if (child->visits > max_visits) {
+            max_visits = child->visits;
+            best_action = child->action;
+        }
+    }
+    return best_action;
+}
+
+================================================================================
+File: mcts_virtual_loss.cpp
+================================================================================
+/*
+ * Module: Virtual Loss MCTS Agent (Thread-Safe Tree Parallelization)
+ *
+ * This implementation utilizes atomic variables and the "Virtual Loss" 
+ * (or Virtual Visit) technique. During the Selection phase, as a thread 
+ * descends the tree, it immediately increments the atomic `visits` counter 
+ * of each node it selects. 
+ *
+ * This temporary statistical penalty decreases the node's UCB1 exploit score 
+ * and increases the explore pressure for other threads, naturally diverging 
+ * concurrent searches and preventing redundant simulations on the same leaf.
+ * During Backpropagation, only the atomic `wins` are updated, as the visits 
+ * were already accounted for on the way down.
+ */
+
+#include "agent.hpp"
+#include "mcts_concurrent.hpp"
+
+#include <cmath>
+#include <omp.h>
+
+VirtualLossParallelAgent::VirtualLossParallelAgent(int sims, int threads, size_t pool_size)
+    : name("VirtualLoss"), simulations(sims), num_threads(threads) 
+{
+    memory_pool_ptr = new ConcurrentNodePool(pool_size);
+    std::random_device rd;
+    for (int i = 0; i < num_threads; ++i) {
+        thread_engines.emplace_back(rd());
+    }
+}
+
+VirtualLossParallelAgent::~VirtualLossParallelAgent() {
+    delete static_cast<ConcurrentNodePool*>(memory_pool_ptr);
+}
+
+Action VirtualLossParallelAgent::next_action(const State& root_state) {
+    auto* pool = static_cast<ConcurrentNodePool*>(memory_pool_ptr);
+    pool->reset();
+    
+    ConcurrentNode* root = pool->allocate(root_state, nullptr, Action{0});
+
+    #pragma omp parallel num_threads(num_threads)
+    {
+        int thread_id = omp_get_thread_num();
+        auto& eng = thread_engines[thread_id];
+        
+        int thread_sims = simulations / num_threads;
+
+        for (int i = 0; i < thread_sims; ++i) {
+            ConcurrentNode* node = root;
+            
+            // 0. Apply Virtual Visit to root
+            root->visits.fetch_add(1, std::memory_order_relaxed);
+            
+            // 1. Selection
+            while (node->untried_space.count == 0 && !node->children.empty()) {
+                ConcurrentNode* best_child = nullptr;
+                double best_score = -1.0;
+                
+                int parent_visits = node->visits.load(std::memory_order_relaxed);
+                
+                for (ConcurrentNode* child : node->children) {
+                    int child_visits = child->visits.load(std::memory_order_relaxed);
+                    double child_wins = child->wins.load(std::memory_order_relaxed);
+                    
+                    if (child_visits == 0) {
+                        best_child = child;
+                        break; 
+                    }
+                    
+                    double exploit = child_wins / child_visits;
+                    double explore = 1.414 * std::sqrt(std::log(parent_visits) / child_visits);
+                    double score = exploit + explore;
+                    
+                    if (score > best_score) {
+                        best_score = score;
+                        best_child = child;
+                    }
+                }
+                
+                node = best_child;
+                // Apply Virtual Visit on the way down
+                node->visits.fetch_add(1, std::memory_order_relaxed);
+            }
+            
+            // 2. Expansion (Strictly Protected Topology)
+            if (node->untried_space.count > 0 && node->state.winner == Player::None) {
+                omp_set_lock(&node->lock);
+                
+                ConcurrentNode* new_child = nullptr;
+                
+                if (node->untried_space.count > 0) {
+                    std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
+                    int idx = dist(eng); 
+                    Action action = node->untried_space.actions[idx];
+                    
+                    node->untried_space.actions[idx] = node->untried_space.actions[node->untried_space.count - 1];
+                    node->untried_space.count--;
+                    
+                    State next_s = node->state;
+                    next_state(next_s, action);
+                    
+                    new_child = pool->allocate(next_s, node, action);
+                    node->children.push_back(new_child);
+                }
+                
+                omp_unset_lock(&node->lock);
+                
+                if (new_child != nullptr) {
+                    node = new_child;
+                    // Apply Virtual Visit to the newly expanded child
+                    node->visits.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            
+            // 3. Simulation
+            State sim_state = node->state;
+            while (sim_state.winner == Player::None) {
+                ActionSpace space = get_actions(sim_state);
+                if (space.count == 0) break;
+                std::uniform_int_distribution<int> dist(0, space.count - 1);
+                next_state(sim_state, space.actions[dist(eng)]); 
+            }
+            Player winner = sim_state.winner;
+            
+            // 4. Backpropagation
+            ConcurrentNode* curr = node;
+            while (curr != nullptr) {
+                // Notice we do NOT increment `visits` here. 
+                // The thread already incremented `visits` during the descent/expansion.
+                if (curr->parent != nullptr) {
+                    if (winner == curr->parent->state.turn) {
+                        // Safely apply the real win atomicaly
+                        curr->wins.fetch_add(1.0, std::memory_order_relaxed);
+                    }
+                }
+                curr = curr->parent;
+            }
+        }
+    }
+    
+    // Select best move
+    Action best_action{0};
+    int max_visits = -1;
+    for (ConcurrentNode* child : root->children) {
+        int v = child->visits.load(std::memory_order_relaxed);
+        if (v > max_visits) {
+            max_visits = v;
+            best_action = child->action;
+        }
+    }
+    return best_action;
+}
+
+================================================================================
+File: mcts_pool.cpp
+================================================================================
+#include "mcts_common.hpp"
+
+#include <iostream>
+
+/* Memory Pool */
+
+NodePool::NodePool(size_t capacity) {
+    pool.resize(capacity);
+    cursor = 0;
+}
+
+void NodePool::reset() {
+    cursor = 0; 
+}
+
+Node* NodePool::allocate(const State& s, Node* p, Action a) {
+    if (cursor >= pool.size()) {
+        std::cerr << "CRITICAL ERROR: Node pool exhausted!\n";
+        exit(1);
+    }
+
+    Node* n = &pool[cursor++];
+    
+    n->state = s;
+    n->parent = p;
+    n->action = a;
+    n->visits = 0;
+    n->wins = 0.0;
+    n->children.clear(); 
+    n->untried_space = get_actions(s);
+    
+    return n;
+}
+
+================================================================================
+File: mcts_lockfree.cpp
+================================================================================
+/*
+ * Module: Lock-Free MCTS Agent
+ *
+ * This implementation tests the limits of lock-free heuristic search. It applies
+ * a strict OpenMP spinlock EXCLUSIVELY to the tree topology (node expansion) to 
+ * prevent memory corruption and segmentation faults. 
+ *
+ * However, the Backpropagation and Selection phases are intentionally "racy". 
+ * Threads load, modify, and store the visits and wins variables without atomic 
+ * guarantees (using an explicit read-modify-write pattern on the atomics with 
+ * memory_order_relaxed). This will result in dropped increments ("lost updates") 
+ * when threads collide. The goal is to see if the sheer volume of simulations 
+ * gained by removing synchronization overhead outweighs the statistical degradation 
+ * caused by the race conditions.
+ */
+
+#include "agent.hpp"
+#include "mcts_concurrent.hpp"
+
+#include <cmath>
+#include <omp.h>
+
+LockFreeParallelAgent::LockFreeParallelAgent(int sims, int threads, size_t pool_size)
+    : name("LockFree"), simulations(sims), num_threads(threads) 
+{
+    memory_pool_ptr = new ConcurrentNodePool(pool_size);
+    std::random_device rd;
+    for (int i = 0; i < num_threads; ++i) {
+        thread_engines.emplace_back(rd());
+    }
+}
+
+LockFreeParallelAgent::~LockFreeParallelAgent() {
+    delete static_cast<ConcurrentNodePool*>(memory_pool_ptr);
+}
+
+Action LockFreeParallelAgent::next_action(const State& root_state) {
+    auto* pool = static_cast<ConcurrentNodePool*>(memory_pool_ptr);
+    pool->reset();
+    
+    ConcurrentNode* root = pool->allocate(root_state, nullptr, Action{0});
+
+    #pragma omp parallel num_threads(num_threads)
+    {
+        int thread_id = omp_get_thread_num();
+        auto& eng = thread_engines[thread_id];
+        
+        // Distribute simulations evenly across threads
+        int thread_sims = simulations / num_threads;
+
+        for (int i = 0; i < thread_sims; ++i) {
+            ConcurrentNode* node = root;
+            
+            // 1. Selection (Racy reads)
+            while (node->untried_space.count == 0 && !node->children.empty()) {
+                ConcurrentNode* best_child = nullptr;
+                double best_score = -1.0;
+                
+                // We use memory_order_relaxed because we accept stale data.
+                int parent_visits = node->visits.load(std::memory_order_relaxed);
+                
+                for (ConcurrentNode* child : node->children) {
+                    int child_visits = child->visits.load(std::memory_order_relaxed);
+                    double child_wins = child->wins.load(std::memory_order_relaxed);
+                    
+                    if (child_visits == 0) {
+                        best_child = child;
+                        break; // Immediately explore unvisited nodes
+                    }
+                    
+                    double exploit = child_wins / child_visits;
+                    double explore = 1.414 * std::sqrt(std::log(parent_visits) / child_visits);
+                    double score = exploit + explore;
+                    
+                    if (score > best_score) {
+                        best_score = score;
+                        best_child = child;
+                    }
+                }
+                node = best_child;
+            }
+            
+            // 2. Expansion (Strictly Protected Topology)
+            // We MUST lock here because std::vector reallocation or concurrent 
+            // array popping will cause a segfault.
+            if (node->untried_space.count > 0 && node->state.winner == Player::None) {
+                omp_set_lock(&node->lock);
+                
+                ConcurrentNode* new_child = nullptr;
+                
+                // Double-check condition after acquiring lock
+                if (node->untried_space.count > 0) {
+                    std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
+                    int idx = dist(eng); 
+                    Action action = node->untried_space.actions[idx];
+                    
+                    node->untried_space.actions[idx] = node->untried_space.actions[node->untried_space.count - 1];
+                    node->untried_space.count--;
+                    
+                    State next_s = node->state;
+                    next_state(next_s, action);
+                    
+                    new_child = pool->allocate(next_s, node, action);
+                    node->children.push_back(new_child);
+                }
+                
+                // Unlock the parent BEFORE moving down the tree
+                omp_unset_lock(&node->lock);
+                
+                if (new_child != nullptr) {
+                    node = new_child;
+                }
+            }
+            
+            // 3. Simulation
+            State sim_state = node->state;
+            while (sim_state.winner == Player::None) {
+                ActionSpace space = get_actions(sim_state);
+                if (space.count == 0) break;
+                std::uniform_int_distribution<int> dist(0, space.count - 1);
+                next_state(sim_state, space.actions[dist(eng)]); 
+            }
+            Player winner = sim_state.winner;
+            
+            // 4. Backpropagation (Intentional Data Races)
+            ConcurrentNode* curr = node;
+            while (curr != nullptr) {
+                // EXPLICIT RACE CONDITION: 
+                // Load -> Local Add -> Store. 
+                // If two threads execute the Load simultaneously, one addition is permanently lost.
+                // This simulates a purely lock-free approach without triggering undefined behavior.
+                int current_visits = curr->visits.load(std::memory_order_relaxed);
+                curr->visits.store(current_visits + 1, std::memory_order_relaxed);
+                
+                if (curr->parent != nullptr) {
+                    if (winner == curr->parent->state.turn) {
+                        double current_wins = curr->wins.load(std::memory_order_relaxed);
+                        curr->wins.store(current_wins + 1.0, std::memory_order_relaxed);
+                    }
+                }
+                curr = curr->parent;
+            }
+        }
+    }
+    
+    // Select best move based on raw visits at the root
+    Action best_action{0};
+    int max_visits = -1;
+    for (ConcurrentNode* child : root->children) {
+        int v = child->visits.load(std::memory_order_relaxed);
+        if (v > max_visits) {
+            max_visits = v;
+            best_action = child->action;
+        }
+    }
+    return best_action;
+}
+
+================================================================================
+File: mcts_seq.cpp
+================================================================================
+#include "agent.hpp"
+
+#include <cmath>
+
+Action SequentialAgent::next_action(const State& root_state) {
+    memory_pool.reset();
+    Node* root = memory_pool.allocate(root_state, nullptr, Action{0});
+
+    for (int i = 0; i < simulations; ++i) {
+        Node* node = root;
+        
+        // Selection
+        while (node->untried_space.count == 0 && !node->children.empty()) {
+            Node* best_child = nullptr;
+            double best_score = -1.0;
+            for (Node* child : node->children) {
+                double exploit = child->wins / child->visits;
+                double explore = 1.414 * std::sqrt(std::log(node->visits) / child->visits);
+                double score = exploit + explore;
+                if (score > best_score) {
+                    best_score = score;
+                    best_child = child;
+                }
+            }
+            node = best_child;
+        }
+        
+        // Expansion
+        if (node->untried_space.count > 0 && node->state.winner == Player::None) {
+            std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
+            int idx = dist(eng); 
+            Action action = node->untried_space.actions[idx];
+            
+            node->untried_space.actions[idx] = node->untried_space.actions[node->untried_space.count - 1];
+            node->untried_space.count--;
+            
+            State next_s = node->state;
+            next_state(next_s, action);
+            
+            Node* child = memory_pool.allocate(next_s, node, action);
+            node->children.push_back(child);
+            node = child;
+        }
+        
+        // Simulation
+        State sim_state = node->state;
+        while (sim_state.winner == Player::None) {
+            ActionSpace space = get_actions(sim_state);
+            if (space.count == 0) break;
+            std::uniform_int_distribution<int> dist(0, space.count - 1);
+            next_state(sim_state, space.actions[dist(eng)]); 
+        }
+        Player winner = sim_state.winner;
+        
+        // Backprop
+        Node* curr = node;
+        while (curr != nullptr) {
+            curr->visits++;
+            if (curr->parent != nullptr) {
+                if (winner == curr->parent->state.turn) {
+                    curr->wins += 1.0;
+                }
+            }
+            curr = curr->parent;
+        }
+    }
+    
+    Action best_action{0};
+    int max_visits = -1;
+    for (Node* child : root->children) {
+        if (child->visits > max_visits) {
+            max_visits = child->visits;
+            best_action = child->action;
+        }
+    }
+    return best_action;
+}
+
+================================================================================
+File: mcts_root.cpp
+================================================================================
+#include "agent.hpp"
+
+#include <cmath>
+#include <omp.h>
+#include <array>
+
+Action RootParallelAgent::next_action(const State& root_state) {
+    int loop_iterations = simulations / num_threads;
+    
+    // Root node of each tree
+    std::vector<Node*> thread_roots(num_threads, nullptr);
+
+    // Parallel section, each thread runs MCTS
+    #pragma omp parallel num_threads(num_threads)
+    {
+        int thread_id = omp_get_thread_num();
+        auto& pool = memory_pools[thread_id];
+        auto& eng = thread_engines[thread_id];
+
+        pool.reset();
+        Node* root = pool.allocate(root_state, nullptr, Action{0});
+        thread_roots[thread_id] = root;
+
+        for (int i = 0; i < loop_iterations; ++i) {
+            Node* node = root;
+            
+            // Selection
+            while (node->untried_space.count == 0 && !node->children.empty()) {
+                Node* best_child = nullptr;
+                double best_score = -1.0;
+                for (Node* child : node->children) {
+                    double exploit = child->wins / child->visits;
+                    double explore = 1.414 * std::sqrt(std::log(node->visits) / child->visits);
+                    double score = exploit + explore;
+                    if (score > best_score) {
+                        best_score = score;
+                        best_child = child;
+                    }
+                }
+                node = best_child;
+            }
+            
+            // Expansion
+            if (node->untried_space.count > 0 && node->state.winner == Player::None) {
+                std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
+                int idx = dist(eng); 
+                Action action = node->untried_space.actions[idx];
+                
+                node->untried_space.actions[idx] = node->untried_space.actions[node->untried_space.count - 1];
+                node->untried_space.count--;
+                
+                State next_s = node->state;
+                next_state(next_s, action);
+                
+                Node* child = pool.allocate(next_s, node, action);
+                node->children.push_back(child);
+                node = child;
+            }
+            
+            // Simulation
+            State sim_state = node->state;
+            while (sim_state.winner == Player::None) {
+                ActionSpace space = get_actions(sim_state);
+                if (space.count == 0) break;
+                std::uniform_int_distribution<int> dist(0, space.count - 1);
+                next_state(sim_state, space.actions[dist(eng)]); 
+            }
+            Player winner = sim_state.winner;
+            
+            // Backprop
+            Node* curr = node;
+            while (curr != nullptr) {
+                curr->visits++;
+                if (curr->parent != nullptr) {
+                    if (winner == curr->parent->state.turn) {
+                        curr->wins += 1.0;
+                    }
+                }
+                curr = curr->parent;
+            }
+        }
+    }
+
+    // Aggregation of all trees
+    // We use size 256 to safely accommodate the SWAP_MOVE (index 255)
+    std::array<int, 256> total_visits = {0}; 
+    for (Node* root : thread_roots) {
+        for (Node* child : root->children) {
+            total_visits[child->action.move_idx] += child->visits;
+        }
+    }
+
+    // Selection of the most visited move
+    Action best_action{0};
+    int max_visits = -1;
+
+    // Iterate using a standard int to prevent uint8_t overflow loop (255 + 1 -> 0)
+    for (int i = 0; i < 256; ++i) { 
+        if (total_visits[i] > max_visits) {
+            max_visits = total_visits[i];
+            best_action = Action{static_cast<u>(i)};
+        }
+    }
+    
+    return best_action;
+}
+
+================================================================================
+File: comments.md
+================================================================================
+# Comments Style Guide
+
+This document defines the comment style that a generative AI should follow when writing or modifying code in this project.
+
+All comments and documentation must be written in English. Every file must begin with a module-level multi-line comment that explains the purpose of the file, its main responsibilities, and any important context needed to understand its role within the project. Comments should be self-contained and understandable without requiring knowledge of previous conversations, prompts, discussions, or development history. Assume that a developer reading the code has access only to the project itself.
+
+Comments should focus on explaining intent, assumptions, constraints, business rules, and non-obvious implementation details. Avoid comments that simply describe what the code is doing when the code is already clear. Prefer comments that explain why a particular approach was chosen or why a specific behavior exists. Keep comments concise, clear, and maintainable. When in doubt, favor fewer high-quality comments over many redundant ones.
+
+================================================================================
+File: plot.py
+================================================================================
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import sys
+import os
+
+def load_data(filepath="plot_data.csv"):
+    if not os.path.exists(filepath):
+        print(f"Error: {filepath} not found in the current directory.")
+        sys.exit(1)
+        
+    df = pd.read_csv(filepath)
+    
+    # Calculate Relative Speedup dynamically
+    df['Relative_Speedup'] = 0.0
+    for sims in df['Sims'].unique():
+        baseline_df = df[(df['Sims'] == sims) & (df['Agent'] == 'Sequential')]
+        if not baseline_df.empty:
+            baseline_time = baseline_df['Avg_Time_Per_Sim_Ms'].values[0]
+            mask = df['Sims'] == sims
+            df.loc[mask, 'Relative_Speedup'] = baseline_time / df.loc[mask, 'Avg_Time_Per_Sim_Ms']
+            
+    return df
+
+def plot_graph(df, choice, sub_choice_val):
+    plt.figure(figsize=(10, 6))
+    sns.set_theme(style="whitegrid")
+    
+    if choice == '1':
+        # 1. Time per Simulation vs Threads (filtered by Sims)
+        print("\n--- Plot Description ---")
+        print("Visualizing: Raw Execution Time vs. Thread Count.")
+        print("Context: Evaluates the physical scaling limits of the implementations.")
+        print("Look for: Flattening curves that indicate hardware saturation, lock contention ")
+        print("(e.g., in Lock-Free or Root), or tree-traversal bottlenecks as thread counts increase.")
+        
+        subset = df[(df['Sims'] == sub_choice_val) & (df['Agent'] != 'Sequential')]
+        sns.lineplot(data=subset, x='Threads', y='Avg_Time_Per_Sim_Ms', hue='Agent', marker='o', linewidth=2, markersize=8)
+        
+        plt.title(f'Time per Simulation vs Threads ({sub_choice_val} Sims)', fontsize=14, pad=15)
+        plt.ylabel('Time per Simulation (ms)', fontsize=12)
+        plt.xlabel('Threads', fontsize=12)
+        plt.xticks([2, 4, 8])
+
+    elif choice == '2':
+        # 2. Relative Speedup vs Threads (filtered by Sims)
+        print("\n--- Plot Description ---")
+        print("Visualizing: Parallel Speedup vs. Thread Count.")
+        print("Context: Maps directly to Amdahl's Law for the MCTS loop.")
+        print("Look for: Deviation from the ideal linear scaling line. Leaf parallelization usually ")
+        print("scales poorly due to lack of shared tree info, while Virtual Loss might show overhead costs.")
+        
+        subset = df[(df['Sims'] == sub_choice_val) & (df['Agent'] != 'Sequential')]
+        sns.lineplot(data=subset, x='Threads', y='Relative_Speedup', hue='Agent', marker='o', linewidth=2, markersize=8)
+        plt.plot([2, 4, 8], [2, 4, 8], 'k--', label='Ideal Linear Speedup', alpha=0.6)
+        
+        plt.title(f'Relative Speedup vs Threads ({sub_choice_val} Sims)', fontsize=14, pad=15)
+        plt.ylabel('Relative Speedup (x)', fontsize=12)
+        plt.xlabel('Threads', fontsize=12)
+        plt.xticks([2, 4, 8])
+        plt.legend()
+
+    elif choice == '3':
+        # 3. Global Winrate vs Threads (filtered by Sims)
+        print("\n--- Plot Description ---")
+        print("Visualizing: Playing Strength vs. Thread Count.")
+        print("Context: Tracks search degradation (Search Overhead). Parallel MCTS inherently ")
+        print("loses exploitation efficiency as threads explore independently before backpropagating.")
+        print("Look for: Severe winrate drops at higher thread counts, particularly in lock-free ")
+        print("or root parallelization where race conditions or tree splitting dilute path values.")
+        
+        subset = df[(df['Sims'] == sub_choice_val) & (df['Agent'] != 'Sequential')]
+        sns.lineplot(data=subset, x='Threads', y='Global_Winrate', hue='Agent', marker='o', linewidth=2, markersize=8)
+        
+        plt.title(f'Global Winrate vs Threads ({sub_choice_val} Sims)', fontsize=14, pad=15)
+        plt.ylabel('Global Winrate (%)', fontsize=12)
+        plt.xlabel('Threads', fontsize=12)
+        plt.xticks([2, 4, 8])
+
+    elif choice == '4':
+        # 4. Pareto Front (filtered by Sims)
+        print("\n--- Plot Description ---")
+        print("Visualizing: Pareto Efficiency (Time per Turn vs. Global Winrate).")
+        print("Context: The ultimate deployment metric. Combines computational speed with playing strength.")
+        print("Look for: Configurations closest to the top-left corner (fastest moves, highest winrate). ")
+        print("Agents in the bottom-right are strictly dominated (slow and weak).")
+        
+        subset = df[(df['Sims'] == sub_choice_val)]
+        # Map threads to marker sizes for the scatter plot
+        sizes = {1: 50, 2: 100, 4: 200, 8: 350}
+        
+        sns.scatterplot(
+            data=subset, x='Avg_Time_Per_Turn', y='Global_Winrate', 
+            hue='Agent', size='Threads', sizes=sizes, alpha=0.8
+        )
+        
+        plt.title(f'Pareto Front: Efficiency vs Strength ({sub_choice_val} Sims)', fontsize=14, pad=15)
+        plt.ylabel('Global Winrate (%)', fontsize=12)
+        plt.xlabel('Average Time Per Turn (Seconds)', fontsize=12)
+
+    elif choice == '5':
+        # 5. Winrate vs Sims (filtered by Thread count)
+        print("\n--- Plot Description ---")
+        print("Visualizing: Convergence Rate (Winrate vs. Simulation Budget).")
+        print("Context: Evaluates the learning curve of the algorithms.")
+        print("Look for: Agents that plateau early, indicating that higher simulation budgets are ")
+        print("wasted due to parallel search inefficiencies (e.g., getting stuck in local optima).")
+        
+        # Include the sequential baseline for comparison against the selected thread count
+        subset = df[(df['Threads'] == sub_choice_val) | (df['Agent'] == 'Sequential')]
+        sns.lineplot(data=subset, x='Sims', y='Global_Winrate', hue='Agent', marker='o', linewidth=2, markersize=8)
+        
+        plt.title(f'Learning Curve: Winrate vs Simulations ({sub_choice_val} Threads)', fontsize=14, pad=15)
+        plt.ylabel('Global Winrate (%)', fontsize=12)
+        plt.xlabel('Total Simulations', fontsize=12)
+        plt.xticks([5000, 10000, 20000])
+
+    print("\n[!] Opening Graph Window...")
+    print("[!] Close the graph window to return to the menu.")
+    plt.show()
+
+def main():
+    df = load_data()
+    sim_options = sorted(df['Sims'].unique())
+    thread_options = sorted(df[df['Agent'] != 'Sequential']['Threads'].unique())
+    
+    while True:
+        print("\n" + "="*45)
+        print("   MCTS HEX BENCHMARK VISUALIZER   ")
+        print("="*45)
+        print("1. Time per Simulation vs Threads")
+        print("2. Relative Speedup vs Threads")
+        print("3. Global Winrate vs Threads")
+        print("4. Pareto Front (Time per Turn vs Winrate)")
+        print("5. Learning Curve (Winrate vs Sims Budget)")
+        print("6. Exit")
+        
+        choice = input("\nSelect a plot (1-6): ").strip()
+        
+        if choice == '6':
+            print("Exiting...")
+            break
+            
+        if choice not in ['1', '2', '3', '4', '5']:
+            print("Invalid choice. Please enter 1-6.")
+            continue
+            
+        # Choices 1-4 require filtering by Simulation Budget
+        if choice in ['1', '2', '3', '4']:
+            print("\n--- Select Simulation Budget ---")
+            for i, sim in enumerate(sim_options, 1):
+                print(f"{i}. {sim} Sims")
+                
+            sub_choice = input(f"Select budget (1-{len(sim_options)}): ").strip()
+            
+            try:
+                sim_idx = int(sub_choice) - 1
+                if 0 <= sim_idx < len(sim_options):
+                    plot_graph(df, choice, sim_options[sim_idx])
+                else:
+                    print("Invalid budget selection.")
+            except ValueError:
+                print("Please enter a valid number.")
+                
+        # Choice 5 requires filtering by Thread Count
+        elif choice == '5':
+            print("\n--- Select Thread Count ---")
+            for i, t in enumerate(thread_options, 1):
+                print(f"{i}. {t} Threads")
+                
+            sub_choice = input(f"Select thread count (1-{len(thread_options)}): ").strip()
+            
+            try:
+                t_idx = int(sub_choice) - 1
+                if 0 <= t_idx < len(thread_options):
+                    plot_graph(df, choice, thread_options[t_idx])
+                else:
+                    print("Invalid thread selection.")
+            except ValueError:
+                print("Please enter a valid number.")
+
+if __name__ == "__main__":
+    main()
+
+================================================================================
+File: experiment.cpp
+================================================================================
+/*
+ * Module: Experiment Engine
+ *
+ * Executes the MCTS agent matches and handles metric collection. The core loop
+ * isolates the computation time of the test agent from the baseline agent to
+ * provide accurate performance profiling. It also generates both normalized raw 
+ * data logs and aggregated summary reports.
+ */
+
+#include "experiment.hpp"
+#include "env.hpp"
+#include "common.hpp"
+
+#include <iostream>
+#include <iomanip>
+#include <chrono>
+#include <fstream>
+#include <memory>
+#include <numeric>
+
+void print_dashboard(const std::vector<ExperimentResult>& past_results, 
+                     int current_config, int total_configs, 
+                     int n_size, int matches, 
+                     const std::string& test_agent_name, int test_sims, int test_threads,
+                     int current_match, int current_turn, 
+                     int test_wins, int baseline_wins,
+                     double accumulated_test_time) {
+    
+    std::cout << "\033[2J\033[H";   
+    std::cout << "Dashboard\n\n";
+
+    if (!past_results.empty()) {
+        std::cout << "Completed Experiments:\n";
+        std::cout << std::left 
+                  << std::setw(15) << "Agent"
+                  << std::setw(10) << "Sims"
+                  << std::setw(10) << "Threads"
+                  << std::setw(12) << "Matches" 
+                  << std::setw(15) << "Test Time(s)" << "\n";
+        std::cout << std::string(62, '-') << "\n";
+        for (const auto& r : past_results) {
+            double total_time = 0.0;
+            for (const auto& m : r.matches) total_time += m.test_mcts_time;
+            
+            std::cout << std::left 
+                      << std::setw(15) << r.agent_name
+                      << std::setw(10) << r.simulations
+                      << std::setw(10) << r.num_threads
+                      << std::setw(12) << r.matches.size() 
+                      << std::fixed << std::setprecision(2)
+                      << std::setw(15) << total_time << "\n";
+        }
+        std::cout << "\n";
+    }
+
+    std::cout << "Current Experiment: " << current_config << " / " << total_configs << "\n";
+    std::cout << "N         : " << n_size << "x" << n_size << "\n";
+    std::cout << "Testing   : " << test_agent_name << " (" << test_sims << " sims, " << test_threads << " threads)\n";
+    std::cout << "Match     : " << current_match << " / " << matches << "\n";
+    std::cout << "Turn      : " << current_turn << "\n";
+    std::cout << "Test Wins : " << test_wins << "\n";
+    std::cout << "Base Wins : " << baseline_wins << "\n";
+    std::cout << "Test Time : " << std::fixed << std::setprecision(2) << accumulated_test_time << " seconds\n";
+    std::cout << std::flush;
+}
+
+ExperimentResult run_experiment(const ExperimentConfig& config, 
+                                int matches, 
+                                Agent& baseline_agent, 
+                                const std::vector<ExperimentResult>& past_results, 
+                                int config_num, int total_configs) {
+    
+    std::unique_ptr<Agent> test_agent;
+    if (config.type == AgentType::Sequential) {
+        test_agent = std::make_unique<SequentialAgent>(config.simulations);
+    } else if (config.type == AgentType::LeafParallel) {
+        test_agent = std::make_unique<LeafParallelAgent>(config.simulations, config.num_threads);
+    } else if (config.type == AgentType::RootParallel) {
+        test_agent = std::make_unique<RootParallelAgent>(config.simulations, config.num_threads);
+    } else if (config.type == AgentType::LockFree) {
+        test_agent = std::make_unique<LockFreeParallelAgent>(config.simulations, config.num_threads);
+    } else if (config.type == AgentType::VirtualLoss) {
+        test_agent = std::make_unique<VirtualLossParallelAgent>(config.simulations, config.num_threads);
+    } else if (config.type == AgentType::WuUct) {
+        test_agent = std::make_unique<WuUctParallelAgent>(config.simulations, config.num_threads);
+    }
+
+    ExperimentResult res;
+    res.config_id = config_num;
+    res.n_size = N;
+    res.agent_name = test_agent->get_name();
+    res.simulations = test_agent->get_simulations();
+    res.num_threads = test_agent->get_num_threads();
+
+    int test_wins = 0;
+    int baseline_wins = 0;
+    double accumulated_test_time = 0.0;
+
+    for (int game = 1; game <= matches; ++game) {
+        State state = create_initial_state();
+        bool test_is_p1 = (game % 2 != 0); 
+        
+        int game_turns = 0;
+        int test_turns = 0;
+        double match_test_time = 0.0;
+        double match_base_time = 0.0;
+        
+        while (state.winner == Player::None) {
+            ActionSpace space = get_actions(state);
+            if (space.count == 0) break; 
+
+            print_dashboard(past_results, config_num, total_configs, N, matches, 
+                            res.agent_name, res.simulations, res.num_threads,
+                            game, game_turns + 1, test_wins, baseline_wins, accumulated_test_time);
+
+            Action action;
+            bool is_test_turn = (state.turn == Player::First && test_is_p1) || 
+                                (state.turn == Player::Second && !test_is_p1);
+            
+            auto start_time = std::chrono::high_resolution_clock::now();
+            
+            if (is_test_turn) {
+                action = test_agent->next_action(state);
+            } else {
+                action = baseline_agent.next_action(state);
+            }
+            
+            auto end_time = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> duration = end_time - start_time;
+            
+            if (is_test_turn) {
+                match_test_time += duration.count();
+                accumulated_test_time += duration.count();
+                test_turns++;
+            } else {
+                match_base_time += duration.count();
+            }
+
+            next_state(state, action);
+            game_turns++;
+        }
+
+        bool test_won = false;
+        if (state.winner == Player::First) {
+            if (test_is_p1) { test_won = true; test_wins++; } else baseline_wins++;
+        } else if (state.winner == Player::Second) {
+            if (!test_is_p1) { test_won = true; test_wins++; } else baseline_wins++;
+        }
+
+        MatchResult m_res;
+        m_res.match_num = game;
+        m_res.test_is_p1 = test_is_p1;
+        m_res.test_won = test_won;
+        m_res.game_turns = game_turns;
+        m_res.test_agent_turns = test_turns;
+        m_res.test_mcts_time = match_test_time;
+        m_res.baseline_mcts_time = match_base_time;
+        
+        res.matches.push_back(m_res);
+    }
+
+    return res;
+}
+
+void save_raw_csv(const ExperimentResult& r, bool is_first) {
+    std::ofstream file("results_raw.csv", is_first ? std::ios::trunc : std::ios::app);
+    if (file.is_open()) {
+        if (is_first) {
+            file << "Config_ID,Agent,Sims,Threads,Match_Num,Test_Is_P1,Test_Won,Total_Turns,Test_Turns,Test_Time_Sec,Base_Time_Sec\n";
+        }
+        for (const auto& m : r.matches) {
+            file << r.config_id << "," << r.agent_name << "," << r.simulations << "," << r.num_threads << ","
+                 << m.match_num << "," << (m.test_is_p1 ? 1 : 0) << "," << (m.test_won ? 1 : 0) << ","
+                 << m.game_turns << "," << m.test_agent_turns << ","
+                 << std::fixed << std::setprecision(4) << m.test_mcts_time << "," 
+                 << std::setprecision(4) << m.baseline_mcts_time << "\n";
+        }
+        file.close();
+    }
+}
+
+void save_summary_csv(const std::vector<ExperimentResult>& all_results) {
+    std::ofstream file("results_summary.csv", std::ios::trunc);
+    if (file.is_open()) {
+        // Added Grid_Size and Avg_Game_Turns to the CSV header
+        file << "Config_ID,Grid_Size,Agent,Sims,Threads,Matches,Global_Winrate,P1_Winrate,P2_Winrate,"
+             << "Avg_Game_Turns,Total_Test_Time,Avg_Time_Per_Match,Avg_Time_Per_Turn,Avg_Time_Per_Sim_Ms\n";
+        
+        for (const auto& r : all_results) {
+            int total_matches = r.matches.size();
+            int p1_matches = 0, p2_matches = 0;
+            int global_wins = 0, p1_wins = 0, p2_wins = 0;
+            double total_time = 0.0;
+            int total_test_turns = 0;
+            int total_game_turns = 0; // Tracks total turns across all matches
+            
+            for (const auto& m : r.matches) {
+                if (m.test_won) global_wins++;
+                if (m.test_is_p1) {
+                    p1_matches++;
+                    if (m.test_won) p1_wins++;
+                } else {
+                    p2_matches++;
+                    if (m.test_won) p2_wins++;
+                }
+                total_time += m.test_mcts_time;
+                total_test_turns += m.test_agent_turns;
+                total_game_turns += m.game_turns;
+            }
+            
+            double global_wr = total_matches > 0 ? (static_cast<double>(global_wins) / total_matches) * 100.0 : 0;
+            double p1_wr = p1_matches > 0 ? (static_cast<double>(p1_wins) / p1_matches) * 100.0 : 0;
+            double p2_wr = p2_matches > 0 ? (static_cast<double>(p2_wins) / p2_matches) * 100.0 : 0;
+            double avg_game_turns = total_matches > 0 ? static_cast<double>(total_game_turns) / total_matches : 0;
+            
+            double avg_match_time = total_matches > 0 ? total_time / total_matches : 0;
+            double avg_turn_time = total_test_turns > 0 ? total_time / total_test_turns : 0;
+            
+            long long total_sims_executed = static_cast<long long>(total_test_turns) * r.simulations;
+            double time_per_sim_ms = total_sims_executed > 0 ? (total_time / total_sims_executed) * 1000.0 : 0;
+
+            file << r.config_id << "," << r.n_size << "," << r.agent_name << "," << r.simulations << "," << r.num_threads << ","
+                 << total_matches << "," 
+                 << std::fixed << std::setprecision(1) << global_wr << "," << p1_wr << "," << p2_wr << ","
+                 << avg_game_turns << ","
+                 << std::setprecision(2) << total_time << "," << avg_match_time << "," 
+                 << std::setprecision(4) << avg_turn_time << "," 
+                 << std::setprecision(6) << time_per_sim_ms << "\n";
+        }
+        file.close();
+    }
+}
+
+void print_final_summary(const std::vector<ExperimentResult>& all_results) {
+    std::cout << "\033[2J\033[H";
+    std::cout << "All experiments completed! Summary saved to results_summary.csv\n\n";
+
+    // Realigned headers to fit the new columns neatly on screen
+    std::cout << std::left 
+              << std::setw(5)  << "N"
+              << std::setw(15) << "Agent"
+              << std::setw(8)  << "Sims"
+              << std::setw(8)  << "Thds"
+              << std::setw(9)  << "Win(Gl)" 
+              << std::setw(9)  << "Win(P1)" 
+              << std::setw(9)  << "Win(P2)" 
+              << std::setw(10) << "AvgTrns" 
+              << std::setw(11) << "Time/Trn" 
+              << std::setw(15) << "Time/Sim(ms)" << "\n";
+    std::cout << std::string(99, '-') << "\n";
+
+    for (const auto& r : all_results) {
+        int total_matches = r.matches.size();
+        int p1_matches = 0, p2_matches = 0;
+        int global_wins = 0, p1_wins = 0, p2_wins = 0;
+        double total_time = 0.0;
+        int total_test_turns = 0;
+        int total_game_turns = 0;
+        
+        for (const auto& m : r.matches) {
+            if (m.test_won) global_wins++;
+            if (m.test_is_p1) { p1_matches++; if (m.test_won) p1_wins++; } 
+            else { p2_matches++; if (m.test_won) p2_wins++; }
+            total_time += m.test_mcts_time;
+            total_test_turns += m.test_agent_turns;
+            total_game_turns += m.game_turns;
+        }
+        
+        double global_wr = total_matches > 0 ? (static_cast<double>(global_wins) / total_matches) * 100.0 : 0;
+        double p1_wr = p1_matches > 0 ? (static_cast<double>(p1_wins) / p1_matches) * 100.0 : 0;
+        double p2_wr = p2_matches > 0 ? (static_cast<double>(p2_wins) / p2_matches) * 100.0 : 0;
+        double avg_game_turns = total_matches > 0 ? static_cast<double>(total_game_turns) / total_matches : 0;
+        double avg_turn_time = total_test_turns > 0 ? total_time / total_test_turns : 0;
+        
+        long long total_sims_executed = static_cast<long long>(total_test_turns) * r.simulations;
+        double time_per_sim_ms = total_sims_executed > 0 ? (total_time / total_sims_executed) * 1000.0 : 0;
+
+        std::cout << std::left 
+                  << std::setw(5)  << r.n_size
+                  << std::setw(15) << r.agent_name
+                  << std::setw(8)  << r.simulations
+                  << std::setw(8)  << r.num_threads
+                  << std::fixed << std::setprecision(1)
+                  << std::setw(9)  << global_wr 
+                  << std::setw(9)  << p1_wr 
+                  << std::setw(9)  << p2_wr 
+                  << std::setw(10) << avg_game_turns
+                  << std::setprecision(4)
+                  << std::setw(11) << avg_turn_time 
+                  << std::setprecision(6)
+                  << std::setw(15) << time_per_sim_ms << "\n";
+    }
+}
+
+================================================================================
+File: main.cpp
+================================================================================
+#include "experiment.hpp"
+#include "agent.hpp"
+
+#include <vector>
+#include <chrono>
+#include <iostream>
+
+int main() {
+    int matches = 50;
+    int sims = 5000;
+
+    // int matches = 1;
+    // int sims = 100;
+
+    SequentialAgent baseline_agent(sims); 
+
+    std::vector<ExperimentConfig> experiments;
+
+    std::array<int, 3> all_sims_mults = {1, 2, 4};
+
+    std::array<AgentType, 5> all_agent_types = {
+        AgentType::LeafParallel,
+        AgentType::RootParallel,
+        AgentType::LockFree,
+        AgentType::VirtualLoss,
+        AgentType::WuUct
+    };
+
+    std::array<int, 3> all_num_threads = {2, 4, 8};
+
+    for (int sims_mult: all_sims_mults) {
+        experiments.push_back({AgentType::Sequential, sims * sims_mult, 1});
+        for (AgentType agent_type: all_agent_types) {
+            for (int num_threads: all_num_threads) {
+                experiments.push_back({agent_type, sims * sims_mult, num_threads});
+            }
+        }
+    }
+
+    std::vector<ExperimentResult> all_results;
+    bool first_raw_save = true;
+
+    // Start the clock
+    auto start_time = std::chrono::steady_clock::now();
+
+    for (size_t i = 0; i < experiments.size(); ++i) {
+        auto res = run_experiment(experiments[i], matches, baseline_agent, all_results, i + 1, experiments.size());
+        all_results.push_back(res);
+        
+        // Append raw match data as soon as the experiment finishes
+        save_raw_csv(res, first_raw_save);
+        first_raw_save = false;
+    }
+
+    // Stop the clock
+    auto end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed_seconds = end_time - start_time;
+
+    // Generate the calculated summary table
+    save_summary_csv(all_results);
+    
+    print_final_summary(all_results);
+
+    // Print the total time
+    std::cout << "\nTotal time elapsed for all experiments: " 
+              << elapsed_seconds.count() << " seconds\n";
+
+    return 0;
+}
+
+================================================================================
+File: dsu.hpp
+================================================================================
+#pragma once
+
+#include "common.hpp"
+
+#include <array>
+
+/* Auxiliar structure: Disjoint Set Union */
+
+struct DSU {
+    std::array<u, BOARD_SIZE> parent;
+
+    void init();
+    u find(u i);
+    
+    // NOTE: its possible to implement rank optimization, but it has a large cost in state overhead (the entire board)
+    void unite(u i, u j);
+};
+
+================================================================================
+File: dsu.cpp
+================================================================================
+#include "dsu.hpp"
+
+void DSU::init() {
+    for (u i = 0; i < BOARD_SIZE; ++i) parent[i] = i;
+}
+
+u DSU::find(u i) {
+    u root = i;
+    while (root != parent[root]) root = parent[root];
+    u curr = i;
+    while (curr != root) {
+        u nxt = parent[curr];
+        parent[curr] = root;
+        curr = nxt;
+    }
+    return root;
+}
+
+void DSU::unite(u i, u j) {
+    u root_i = find(i);
+    u root_j = find(j);
+    if (root_i != root_j) parent[root_i] = root_j;
+}
+
+================================================================================
+File: main.py
+================================================================================
+def main():
+    print("Hello from parallel-mcts!")
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+File: experiment.hpp
+================================================================================
+/*
+* Module: Experiment Definitions
+*
+* Defines the configuration and result structures for the benchmark suite.
+* The results are split into two tiers: MatchResult (raw data per game) 
+* and ExperimentResult (aggregated data per agent configuration).
+*/
+
+#pragma once
+
+#include "agent.hpp"
+
+#include <string>
+#include <vector>
+#include <array>
+
+enum class AgentType {
+    Sequential,
+    LeafParallel,
+    RootParallel,
+    LockFree,
+    VirtualLoss,
+    WuUct
+};
+
+struct ExperimentConfig {
+    AgentType type;
+    int simulations;
+    int num_threads;    
+};
+
+struct MatchResult {
+    int match_num;
+    bool test_is_p1;
+    bool test_won;
+    int game_turns;
+    int test_agent_turns;
+    double test_mcts_time;
+    double baseline_mcts_time;
+};
+
+struct ExperimentResult {
+    int config_id;
+    int n_size;
+    std::string agent_name;
+    int simulations;
+    int num_threads;
+    std::vector<MatchResult> matches;
+};
+
+ExperimentResult run_experiment(const ExperimentConfig& config, 
+                                int matches, 
+                                Agent& baseline_agent, 
+                                const std::vector<ExperimentResult>& past_results, 
+                                int config_num, int total_configs);
+
+void save_raw_csv(const ExperimentResult& r, bool is_first);
+void save_summary_csv(const std::vector<ExperimentResult>& all_results);
+void print_final_summary(const std::vector<ExperimentResult>& all_results);
+
+================================================================================
+File: thread_pool.hpp
+================================================================================
+/*
+ * Module: Thread-Safe Queue and Concurrency Utilities
+ *
+ * This file provides the synchronization primitives required for Pipeline 
+ * (Master-Worker) Tree Parallelization. Unlike standard OpenMP loops which 
+ * execute synchronously, the WU-UCT algorithm requires long-lived worker 
+ * threads that idle asynchronously until work is available.
+ *
+ * The ThreadSafeQueue safely passes data (like pending simulations or 
+ * completed results) between the master thread and worker threads without 
+ * data races. It uses a condition variable to put worker threads to sleep 
+ * when the queue is empty, ensuring they consume 0% CPU while waiting, 
+ * and immediately wakes them when a task is pushed.
+ */
+
+#pragma once
+
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <utility>
+
+template <typename T>
+class ThreadSafeQueue {
+private:
+    std::queue<T> queue_;
+    std::mutex mtx_;
+    std::condition_variable cv_;
+    
+    // Flag to gracefully release waiting threads during application shutdown
+    bool shutdown_flag_ = false;
+
+public:
+    ThreadSafeQueue() = default;
+    
+    // Disable copying to prevent accidental duplication of mutexes
+    ThreadSafeQueue(const ThreadSafeQueue&) = delete;
+    ThreadSafeQueue& operator=(const ThreadSafeQueue&) = delete;
+
+    /*
+     * Pushes a new item into the queue and wakes up exactly one sleeping 
+     * worker thread to process it.
+     */
+    void push(T value) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        queue_.push(std::move(value));
+        cv_.notify_one();
+    }
+
+    /*
+     * Used by worker threads. If the queue is empty, the thread goes to sleep.
+     * It wakes up when a new item is pushed or when the queue is shut down.
+     * Returns false if the queue was shut down while empty.
+     */
+    bool wait_and_pop(T& value) {
+        std::unique_lock<std::mutex> lock(mtx_);
+        
+        // Predicate prevents spurious wakeups
+        cv_.wait(lock, [this]() { 
+            return !queue_.empty() || shutdown_flag_; 
+        });
+        
+        if (shutdown_flag_ && queue_.empty()) {
+            return false;
+        }
+        
+        value = std::move(queue_.front());
+        queue_.pop();
+        return true;
+    }
+
+    /*
+     * Used by the master thread to instantly check for completed results 
+     * without blocking its MCTS tree traversal loop.
+     */
+    bool try_pop(T& value) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (queue_.empty()) {
+            return false;
+        }
+        value = std::move(queue_.front());
+        queue_.pop();
+        return true;
+    }
+
+    /*
+     * Safely unblocks all waiting threads and flags the queue as shutting down.
+     * Required to prevent deadlocks when the MCTS agent is destroyed.
+     */
+    void shutdown() {
+        std::lock_guard<std::mutex> lock(mtx_);
+        shutdown_flag_ = true;
+        cv_.notify_all();
+    }
+    
+    bool is_empty() {
+        std::lock_guard<std::mutex> lock(mtx_);
+        return queue_.empty();
+    }
+};
+

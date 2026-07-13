@@ -34,7 +34,7 @@ LockFreeParallelAgent::~LockFreeParallelAgent() {
     delete static_cast<ConcurrentNodePool*>(memory_pool_ptr);
 }
 
-Action LockFreeParallelAgent::next_action(const State& root_state) {
+std::array<int, u_SIZE> LockFreeParallelAgent::get_visit_counts(const State& root_state) {
     auto* pool = static_cast<ConcurrentNodePool*>(memory_pool_ptr);
     pool->reset();
     
@@ -143,15 +143,12 @@ Action LockFreeParallelAgent::next_action(const State& root_state) {
         }
     }
     
-    // Select best move based on raw visits at the root
-    Action best_action{0};
-    int max_visits = -1;
-    for (ConcurrentNode* child : root->children) {
-        int v = child->visits.load(std::memory_order_relaxed);
-        if (v > max_visits) {
-            max_visits = v;
-            best_action = child->action;
-        }
+    std::array<int, u_SIZE> total_visits;
+    total_visits.fill(0);
+    
+    for (auto* child : root->children) {
+        total_visits[child->action.move_idx] = child->visits.load(std::memory_order_relaxed);
     }
-    return best_action;
+    
+    return total_visits;
 }

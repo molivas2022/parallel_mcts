@@ -31,7 +31,7 @@ WuUctParallelAgent::~WuUctParallelAgent() {
     delete static_cast<WuNodePool*>(memory_pool_ptr);
 }
 
-Action WuUctParallelAgent::next_action(const State& root_state) {
+std::array<int, u_SIZE> WuUctParallelAgent::get_visit_counts(const State& root_state) {
     auto* pool = static_cast<WuNodePool*>(memory_pool_ptr);
     pool->reset();
     WuNode* root = pool->allocate(root_state, nullptr, Action{0});
@@ -154,15 +154,12 @@ Action WuUctParallelAgent::next_action(const State& root_state) {
         } // End of single Master thread
     } // End of parallel region
     
-    // Select best move
-    Action best_action{0};
-    int max_visits = -1;
-    for (WuNode* child : root->children) {
-        int child_visits = child->visits.load(std::memory_order_relaxed);
-        if (child_visits > max_visits) {
-            max_visits = child_visits;
-            best_action = child->action;
-        }
+    std::array<int, u_SIZE> total_visits;
+    total_visits.fill(0);
+    
+    for (auto* child : root->children) {
+        total_visits[child->action.move_idx] = child->visits.load(std::memory_order_relaxed);
     }
-    return best_action;
+    
+    return total_visits;
 }
