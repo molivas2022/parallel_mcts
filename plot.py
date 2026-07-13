@@ -4,14 +4,13 @@ import seaborn as sns
 import sys
 import os
 
-def load_data(filepath="plot_data.csv"):
+def load_data(filepath="evaluated_summary.csv"):
     if not os.path.exists(filepath):
-        print(f"Error: {filepath} not found in the current directory.")
+        print(f"Error: {filepath} not found. Run evaluate_oracle.py first.")
         sys.exit(1)
         
     df = pd.read_csv(filepath)
     
-    # Calculate Relative Speedup dynamically
     df['Relative_Speedup'] = 0.0
     for sims in df['Sims'].unique():
         baseline_df = df[(df['Sims'] == sims) & (df['Agent'] == 'Sequential')]
@@ -61,57 +60,47 @@ def plot_graph(df, choice, sub_choice_val):
         plt.legend()
 
     elif choice == '3':
-        # 3. Global Winrate vs Threads (filtered by Sims)
+        # 3. Oracle Score vs Threads
         print("\n--- Plot Description ---")
-        print("Visualizing: Playing Strength vs. Thread Count.")
-        print("Context: Tracks search degradation (Search Overhead). Parallel MCTS inherently ")
-        print("loses exploitation efficiency as threads explore independently before backpropagating.")
-        print("Look for: Severe winrate drops at higher thread counts, particularly in lock-free ")
-        print("or root parallelization where race conditions or tree splitting dilute path values.")
+        print("Visualizing: Search Quality vs. Thread Count.")
+        print("Context: Tracks the continuous degradation of search quality using the MoHex Oracle.")
+        print("Look for: Smooth downward trends showing the exact mathematical cost of parallelization.")
         
         subset = df[(df['Sims'] == sub_choice_val) & (df['Agent'] != 'Sequential')]
-        sns.lineplot(data=subset, x='Threads', y='Global_Winrate', hue='Agent', marker='o', linewidth=2, markersize=8)
+        sns.lineplot(data=subset, x='Threads', y='Avg_Oracle_Score', hue='Agent', marker='o', linewidth=2, markersize=8)
         
-        plt.title(f'Global Winrate vs Threads ({sub_choice_val} Sims)', fontsize=14, pad=15)
-        plt.ylabel('Global Winrate (%)', fontsize=12)
+        plt.title(f'Oracle Score vs Threads ({sub_choice_val} Sims)', fontsize=14, pad=15)
+        plt.ylabel('Average Oracle Score (0.0 - 1.0)', fontsize=12)
         plt.xlabel('Threads', fontsize=12)
         plt.xticks([2, 4, 8])
 
     elif choice == '4':
-        # 4. Pareto Front (filtered by Sims)
+        # 4. Pareto Front
         print("\n--- Plot Description ---")
-        print("Visualizing: Pareto Efficiency (Time per Turn vs. Global Winrate).")
-        print("Context: The ultimate deployment metric. Combines computational speed with playing strength.")
-        print("Look for: Configurations closest to the top-left corner (fastest moves, highest winrate). ")
-        print("Agents in the bottom-right are strictly dominated (slow and weak).")
+        print("Visualizing: Pareto Efficiency (Time per Sim vs. Oracle Score).")
         
         subset = df[(df['Sims'] == sub_choice_val)]
-        # Map threads to marker sizes for the scatter plot
         sizes = {1: 50, 2: 100, 4: 200, 8: 350}
         
         sns.scatterplot(
-            data=subset, x='Avg_Time_Per_Turn', y='Global_Winrate', 
+            data=subset, x='Avg_Time_Per_Sim_Ms', y='Avg_Oracle_Score', 
             hue='Agent', size='Threads', sizes=sizes, alpha=0.8
         )
         
         plt.title(f'Pareto Front: Efficiency vs Strength ({sub_choice_val} Sims)', fontsize=14, pad=15)
-        plt.ylabel('Global Winrate (%)', fontsize=12)
-        plt.xlabel('Average Time Per Turn (Seconds)', fontsize=12)
+        plt.ylabel('Average Oracle Score', fontsize=12)
+        plt.xlabel('Average Time Per Simulation (ms)', fontsize=12)
 
     elif choice == '5':
-        # 5. Winrate vs Sims (filtered by Thread count)
+        # 5. Learning Curve
         print("\n--- Plot Description ---")
-        print("Visualizing: Convergence Rate (Winrate vs. Simulation Budget).")
-        print("Context: Evaluates the learning curve of the algorithms.")
-        print("Look for: Agents that plateau early, indicating that higher simulation budgets are ")
-        print("wasted due to parallel search inefficiencies (e.g., getting stuck in local optima).")
+        print("Visualizing: Convergence Rate (Oracle Score vs. Simulation Budget).")
         
-        # Include the sequential baseline for comparison against the selected thread count
         subset = df[(df['Threads'] == sub_choice_val) | (df['Agent'] == 'Sequential')]
-        sns.lineplot(data=subset, x='Sims', y='Global_Winrate', hue='Agent', marker='o', linewidth=2, markersize=8)
+        sns.lineplot(data=subset, x='Sims', y='Avg_Oracle_Score', hue='Agent', marker='o', linewidth=2, markersize=8)
         
-        plt.title(f'Learning Curve: Winrate vs Simulations ({sub_choice_val} Threads)', fontsize=14, pad=15)
-        plt.ylabel('Global Winrate (%)', fontsize=12)
+        plt.title(f'Learning Curve: Oracle Score vs Sims ({sub_choice_val} Threads)', fontsize=14, pad=15)
+        plt.ylabel('Average Oracle Score', fontsize=12)
         plt.xlabel('Total Simulations', fontsize=12)
         plt.xticks([5000, 10000, 20000])
 

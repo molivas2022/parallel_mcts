@@ -1,23 +1,36 @@
 #include "experiment.hpp"
 #include "agent.hpp"
+#include "dataset.hpp"
 
 #include <vector>
 #include <chrono>
 #include <iostream>
 
 int main() {
-    int matches = 50;
+
+    // Parameters
+
+    // int dataset_size = 100;
+    // int sims = 5000;
+    // std::array<int, 3> all_sims_mults = {1, 2, 4};
+    // std::array<int, 3> all_num_threads = {2, 4, 8};
+
+    int dataset_size = 3;
     int sims = 5000;
+    std::array<int, 2> all_sims_mults = {1, 2};
+    std::array<int, 2> all_num_threads = {2, 4};
 
-    // int matches = 1;
-    // int sims = 100;
+    std::string dataset_file = "dataset.csv";
+    
+    // Uncomment this if you need to generate a fresh dataset
+    generate_dataset(dataset_size, 30, dataset_file);
 
-    SequentialAgent baseline_agent(sims); 
+    std::cout << "Loading dataset...\n";
+    std::vector<State> dataset = load_dataset(dataset_file);
+    std::cout << "Loaded " << dataset.size() << " states.\n";
 
     std::vector<ExperimentConfig> experiments;
-
-    std::array<int, 3> all_sims_mults = {1, 2, 4};
-
+    
     std::array<AgentType, 5> all_agent_types = {
         AgentType::LeafParallel,
         AgentType::RootParallel,
@@ -25,8 +38,6 @@ int main() {
         AgentType::VirtualLoss,
         AgentType::WuUct
     };
-
-    std::array<int, 3> all_num_threads = {2, 4, 8};
 
     for (int sims_mult: all_sims_mults) {
         experiments.push_back({AgentType::Sequential, sims * sims_mult, 1});
@@ -37,33 +48,21 @@ int main() {
         }
     }
 
-    std::vector<ExperimentResult> all_results;
     bool first_raw_save = true;
-
-    // Start the clock
     auto start_time = std::chrono::steady_clock::now();
 
     for (size_t i = 0; i < experiments.size(); ++i) {
-        auto res = run_experiment(experiments[i], matches, baseline_agent, all_results, i + 1, experiments.size());
-        all_results.push_back(res);
-        
-        // Append raw match data as soon as the experiment finishes
+        auto res = run_experiment(experiments[i], dataset, i + 1, experiments.size());
         save_raw_csv(res, first_raw_save);
         first_raw_save = false;
     }
 
-    // Stop the clock
     auto end_time = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed_seconds = end_time - start_time;
 
-    // Generate the calculated summary table
-    save_summary_csv(all_results);
-    
-    print_final_summary(all_results);
-
-    // Print the total time
     std::cout << "\nTotal time elapsed for all experiments: " 
               << elapsed_seconds.count() << " seconds\n";
+    std::cout << "Data saved to results_raw.csv. Ready for Python Oracle Evaluation.\n";
 
     return 0;
 }

@@ -19,6 +19,7 @@
 #include <cmath>
 #include <random>
 #include <omp.h>
+#include <vector>
 
 WuUctParallelAgent::WuUctParallelAgent(int sims, int threads, size_t pool_size)
     : name("WuUct"), simulations(sims), num_threads(threads) 
@@ -35,13 +36,22 @@ Action WuUctParallelAgent::next_action(const State& root_state) {
     pool->reset();
     WuNode* root = pool->allocate(root_state, nullptr, Action{0});
 
+    // Pre-allocate random engines for all threads to avoid thread_local overhead
+    // and OS entropy locks during the heavy task phase.
+    std::vector<std::mt19937> sim_engines(num_threads);
+    std::random_device rd;
+    for (int i = 0; i < num_threads; ++i) {
+        sim_engines[i].seed(rd());
+    }
+
     // Wake up the team of threads
     #pragma omp parallel num_threads(num_threads)
     {
         // Restrict tree traversal to a single Master thread
         #pragma omp single
         {
-            std::mt19937 master_eng(std::random_device{}());
+            // The master thread gets its own engine for the expansion phase
+            std::mt19937 master_eng(rd());
 
             for (int i = 0; i < simulations; ++i) {
                 WuNode* node = root;
@@ -103,10 +113,13 @@ Action WuUctParallelAgent::next_action(const State& root_state) {
                 }
                 
                 // 4. Dispatch Simulation Task to Workers
-                // firstprivate(node) safely passes the pointer to the async task
-                #pragma omp task firstprivate(node)
+                // firstprivate safely passes the node pointer, shared safely exposes the engine array
+                #pragma omp task firstprivate(node) shared(sim_engines)
                 {
-                    std::mt19937 task_eng(std::random_device{}());
+                    // Access the pre-allocated engine using the worker's native thread ID
+                    int thread_id = omp_get_thread_num();
+                    auto& worker_eng = sim_engines[thread_id];
+                    
                     State sim_state = node->state;
                     
                     // Simulation Phase (Heavy workload executed by workers)
@@ -114,7 +127,7 @@ Action WuUctParallelAgent::next_action(const State& root_state) {
                         ActionSpace space = get_actions(sim_state);
                         if (space.count == 0) break;
                         std::uniform_int_distribution<int> dist(0, space.count - 1);
-                        next_state(sim_state, space.actions[dist(task_eng)]);
+                        next_state(sim_state, space.actions[dist(worker_eng)]);
                     }
                     Player winner = sim_state.winner;
                     
