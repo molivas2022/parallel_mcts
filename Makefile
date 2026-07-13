@@ -1,6 +1,7 @@
 # Compiler settings
 CXX = g++
-CXXFLAGS = -std=c++20 -Wall -Wextra -O3 -march=native -flto -fopenmp
+N_SIZE ?= 11	# Default N_SIZE if not provided by the user/script
+CXXFLAGS = -std=c++20 -Wall -Wextra -O3 -march=native -flto -fopenmp -DN_SIZE=$(N_SIZE)
 
 # Executable name
 TARGET = main

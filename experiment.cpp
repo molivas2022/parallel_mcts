@@ -168,45 +168,45 @@ void save_match_raw_csv(const MatchExperimentResult& r, bool is_first) {
     }
 }
 
-void save_match_summary_csv(const std::vector<MatchExperimentResult>& all_results) {
-    std::ofstream file("match_summary.csv", std::ios::trunc);
-    if (file.is_open()) {
-        file << "Config_ID,Grid_Size,Agent,Sims,Threads,Matches,Global_Winrate,P1_Winrate,P2_Winrate,"
-             << "Avg_Game_Turns,Total_Test_Time,Avg_Time_Per_Match,Avg_Time_Per_Turn,Avg_Time_Per_Sim_Ms\n";
+// void save_match_summary_csv(const std::vector<MatchExperimentResult>& all_results) {
+//     std::ofstream file("match_summary.csv", std::ios::trunc);
+//     if (file.is_open()) {
+//         file << "Config_ID,Grid_Size,Agent,Sims,Threads,Matches,Global_Winrate,P1_Winrate,P2_Winrate,"
+//              << "Avg_Game_Turns,Total_Test_Time,Avg_Time_Per_Match,Avg_Time_Per_Turn,Avg_Time_Per_Sim_Ms\n";
         
-        for (const auto& r : all_results) {
-            int total_matches = r.matches.size();
-            int p1_matches = 0, p2_matches = 0;
-            int global_wins = 0, p1_wins = 0, p2_wins = 0;
-            double total_time = 0.0;
-            int total_test_turns = 0, total_game_turns = 0;
+//         for (const auto& r : all_results) {
+//             int total_matches = r.matches.size();
+//             int p1_matches = 0, p2_matches = 0;
+//             int global_wins = 0, p1_wins = 0, p2_wins = 0;
+//             double total_time = 0.0;
+//             int total_test_turns = 0, total_game_turns = 0;
             
-            for (const auto& m : r.matches) {
-                if (m.test_won) global_wins++;
-                if (m.test_is_p1) { p1_matches++; if (m.test_won) p1_wins++; } 
-                else { p2_matches++; if (m.test_won) p2_wins++; }
-                total_time += m.test_mcts_time;
-                total_test_turns += m.test_agent_turns;
-                total_game_turns += m.game_turns;
-            }
+//             for (const auto& m : r.matches) {
+//                 if (m.test_won) global_wins++;
+//                 if (m.test_is_p1) { p1_matches++; if (m.test_won) p1_wins++; } 
+//                 else { p2_matches++; if (m.test_won) p2_wins++; }
+//                 total_time += m.test_mcts_time;
+//                 total_test_turns += m.test_agent_turns;
+//                 total_game_turns += m.game_turns;
+//             }
             
-            double global_wr = total_matches > 0 ? (static_cast<double>(global_wins) / total_matches) * 100.0 : 0;
-            double p1_wr = p1_matches > 0 ? (static_cast<double>(p1_wins) / p1_matches) * 100.0 : 0;
-            double p2_wr = p2_matches > 0 ? (static_cast<double>(p2_wins) / p2_matches) * 100.0 : 0;
-            double avg_game_turns = total_matches > 0 ? static_cast<double>(total_game_turns) / total_matches : 0;
-            double avg_match_time = total_matches > 0 ? total_time / total_matches : 0;
-            double avg_turn_time = total_test_turns > 0 ? total_time / total_test_turns : 0;
+//             double global_wr = total_matches > 0 ? (static_cast<double>(global_wins) / total_matches) * 100.0 : 0;
+//             double p1_wr = p1_matches > 0 ? (static_cast<double>(p1_wins) / p1_matches) * 100.0 : 0;
+//             double p2_wr = p2_matches > 0 ? (static_cast<double>(p2_wins) / p2_matches) * 100.0 : 0;
+//             double avg_game_turns = total_matches > 0 ? static_cast<double>(total_game_turns) / total_matches : 0;
+//             double avg_match_time = total_matches > 0 ? total_time / total_matches : 0;
+//             double avg_turn_time = total_test_turns > 0 ? total_time / total_test_turns : 0;
             
-            long long total_sims_executed = static_cast<long long>(total_test_turns) * r.simulations;
-            double time_per_sim_ms = total_sims_executed > 0 ? (total_time / total_sims_executed) * 1000.0 : 0;
+//             long long total_sims_executed = static_cast<long long>(total_test_turns) * r.simulations;
+//             double time_per_sim_ms = total_sims_executed > 0 ? (total_time / total_sims_executed) * 1000.0 : 0;
 
-            file << r.config_id << "," << r.n_size << "," << r.agent_name << "," << r.simulations << "," << r.num_threads << ","
-                 << total_matches << "," << std::fixed << std::setprecision(1) << global_wr << "," << p1_wr << "," << p2_wr << ","
-                 << avg_game_turns << "," << std::setprecision(2) << total_time << "," << avg_match_time << "," 
-                 << std::setprecision(4) << avg_turn_time << "," << std::setprecision(6) << time_per_sim_ms << "\n";
-        }
-    }
-}
+//             file << r.config_id << "," << r.n_size << "," << r.agent_name << "," << r.simulations << "," << r.num_threads << ","
+//                  << total_matches << "," << std::fixed << std::setprecision(1) << global_wr << "," << p1_wr << "," << p2_wr << ","
+//                  << avg_game_turns << "," << std::setprecision(2) << total_time << "," << avg_match_time << "," 
+//                  << std::setprecision(4) << avg_turn_time << "," << std::setprecision(6) << time_per_sim_ms << "\n";
+//         }
+//     }
+// }
 
 void print_match_final_summary(const std::vector<MatchExperimentResult>& all_results) {
     std::cout << "\033[2J\033[H";
@@ -302,23 +302,23 @@ void save_oracle_raw_csv(const OracleExperimentResult& r, bool is_first) {
     }
 }
 
-void save_oracle_summary_csv(const std::vector<OracleExperimentResult>& all_results) {
-    std::ofstream file("oracle_summary.csv", std::ios::trunc);
-    if (file.is_open()) {
-        file << "Config_ID,Agent,Sims,Threads,Avg_Oracle_Score,Avg_Time_Per_Sim_Ms\n";
-        for (const auto& r : all_results) {
-            double total_score = 0.0;
-            double total_time = 0.0;
-            for (const auto& e : r.evals) {
-                total_score += e.oracle_score;
-                total_time += e.execution_time_ms;
-            }
-            double avg_score = total_score / r.evals.size();
-            double avg_time_ms = total_time / r.evals.size();
+// void save_oracle_summary_csv(const std::vector<OracleExperimentResult>& all_results) {
+//     std::ofstream file("oracle_summary.csv", std::ios::trunc);
+//     if (file.is_open()) {
+//         file << "Config_ID,Agent,Sims,Threads,Avg_Oracle_Score,Avg_Time_Per_Sim_Ms\n";
+//         for (const auto& r : all_results) {
+//             double total_score = 0.0;
+//             double total_time = 0.0;
+//             for (const auto& e : r.evals) {
+//                 total_score += e.oracle_score;
+//                 total_time += e.execution_time_ms;
+//             }
+//             double avg_score = total_score / r.evals.size();
+//             double avg_time_ms = total_time / r.evals.size();
             
-            file << r.config_id << "," << r.agent_name << "," << r.simulations << "," 
-                 << r.num_threads << "," << std::fixed << std::setprecision(4) 
-                 << avg_score << "," << avg_time_ms << "\n";
-        }
-    }
-}
+//             file << r.config_id << "," << r.agent_name << "," << r.simulations << "," 
+//                  << r.num_threads << "," << std::fixed << std::setprecision(4) 
+//                  << avg_score << "," << avg_time_ms << "\n";
+//         }
+//     }
+// }

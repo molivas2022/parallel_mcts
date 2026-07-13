@@ -4,22 +4,46 @@ import seaborn as sns
 import sys
 import os
 
-def load_data(filepath):
+def load_and_aggregate_data(filepath, mode):
     if not os.path.exists(filepath):
         print(f"\n[!] Error: {filepath} not found.")
-        print("    You must run the corresponding pipeline in C++ first.")
         return None
         
-    df = pd.read_csv(filepath)
+    df_raw = pd.read_csv(filepath)
+    
+    if mode == 'Match':
+        df = df_raw.groupby(['Config_ID', 'Agent', 'Sims', 'Threads']).agg(
+            Test_Time_Sec=('Test_Time_Sec', 'sum'),
+            Test_Turns=('Test_Turns', 'sum'),
+            Global_Winrate=('Test_Won', lambda x: x.mean() * 100)
+        ).reset_index()
+        
+        # Calculate derived metrics safely
+        df['Avg_Time_Per_Turn'] = (df['Test_Time_Sec'] / df['Test_Turns']).fillna(0)
+        
+        # Time per 1k Sims: (Total Time / (Total Turns * Sims)) * 1,000,000 to convert sec -> ms per 1k
+        df['Avg_Time_Per_1k_Sims_Ms'] = ((df['Test_Time_Sec'] / (df['Test_Turns'] * df['Sims'])) * 1000000).fillna(0)
+        
+    else:
+        df = df_raw.groupby(['Config_ID', 'Agent', 'Sims', 'Threads']).agg(
+            Avg_Oracle_Score=('Oracle_Score', 'mean'),
+            Time_Ms=('Time_Ms', 'sum'),
+            Eval_Count=('Time_Ms', 'count')
+        ).reset_index()
+        
+        # Time per 1k Sims: (Total Time ms / (Count * Sims)) * 1000
+        df['Avg_Time_Per_1k_Sims_Ms'] = ((df['Time_Ms'] / (df['Eval_Count'] * df['Sims'])) * 1000).fillna(0)
     
     # Calculate Relative Speedup dynamically
     df['Relative_Speedup'] = 0.0
     for sims in df['Sims'].unique():
         baseline_df = df[(df['Sims'] == sims) & (df['Agent'] == 'Sequential')]
         if not baseline_df.empty:
-            baseline_time = baseline_df['Avg_Time_Per_Sim_Ms'].values[0]
+            baseline_time = baseline_df['Avg_Time_Per_1k_Sims_Ms'].values[0]
             mask = df['Sims'] == sims
-            df.loc[mask, 'Relative_Speedup'] = baseline_time / df.loc[mask, 'Avg_Time_Per_Sim_Ms']
+            # Protect against division by zero if time is incredibly fast
+            if baseline_time > 0:
+                df.loc[mask, 'Relative_Speedup'] = baseline_time / df.loc[mask, 'Avg_Time_Per_1k_Sims_Ms']
             
     return df
 
@@ -29,11 +53,11 @@ def plot_common_graphs(df, choice, sub_choice_val, mode):
     
     if choice == '1':
         print("\n--- Plot Description ---")
-        print("Visualizing: Raw Execution Time vs. Thread Count.")
+        print("Visualizing: Execution Time per 1k Simulations vs. Thread Count.")
         subset = df[(df['Sims'] == sub_choice_val) & (df['Agent'] != 'Sequential')]
-        sns.lineplot(data=subset, x='Threads', y='Avg_Time_Per_Sim_Ms', hue='Agent', marker='o', linewidth=2, markersize=8)
-        plt.title(f'Time per Simulation vs Threads ({sub_choice_val} Sims)', fontsize=14, pad=15)
-        plt.ylabel('Time per Simulation (ms)', fontsize=12)
+        sns.lineplot(data=subset, x='Threads', y='Avg_Time_Per_1k_Sims_Ms', hue='Agent', marker='o', linewidth=2, markersize=8)
+        plt.title(f'Time per 1k Simulations vs Threads ({sub_choice_val} Sims)', fontsize=14, pad=15)
+        plt.ylabel('Time per 1k Simulations (ms)', fontsize=12)
         plt.xlabel('Threads', fontsize=12)
         plt.xticks([2, 4, 8])
 
@@ -59,7 +83,7 @@ def handle_match_menu(df):
         print("\n" + "-"*40)
         print("        MATCH PIPELINE METRICS        ")
         print("-"*40)
-        print("1. Time per Simulation vs Threads")
+        print("1. Time per 1k Sims vs Threads")
         print("2. Relative Speedup vs Threads")
         print("3. Global Winrate vs Threads")
         print("4. Pareto Front (Time per Turn vs Winrate)")
@@ -126,10 +150,10 @@ def handle_oracle_menu(df):
         print("\n" + "-"*40)
         print("       ORACLE PIPELINE METRICS        ")
         print("-"*40)
-        print("1. Time per Simulation vs Threads")
+        print("1. Time per 1k Sims vs Threads")
         print("2. Relative Speedup vs Threads")
         print("3. Oracle Score vs Threads")
-        print("4. Pareto Front (Time per Sim vs Oracle Score)")
+        print("4. Pareto Front (Time per 1k Sims vs Oracle Score)")
         print("5. Learning Curve (Oracle Score vs Sims Budget)")
         print("6. Back to Main Menu")
         
@@ -161,10 +185,10 @@ def handle_oracle_menu(df):
                 sns.set_theme(style="whitegrid")
                 subset = df[(df['Sims'] == sub_val)]
                 sizes = {1: 50, 2: 100, 4: 200, 8: 350}
-                sns.scatterplot(data=subset, x='Avg_Time_Per_Sim_Ms', y='Avg_Oracle_Score', hue='Agent', size='Threads', sizes=sizes, alpha=0.8)
+                sns.scatterplot(data=subset, x='Avg_Time_Per_1k_Sims_Ms', y='Avg_Oracle_Score', hue='Agent', size='Threads', sizes=sizes, alpha=0.8)
                 plt.title(f'Pareto Front: Efficiency vs Strength ({sub_val} Sims)', fontsize=14, pad=15)
                 plt.ylabel('Average Oracle Score', fontsize=12)
-                plt.xlabel('Average Time Per Simulation (ms)', fontsize=12)
+                plt.xlabel('Time Per 1k Simulations (ms)', fontsize=12)
 
         elif choice == '5':
             print("\n--- Select Thread Count ---")
@@ -190,17 +214,17 @@ def main():
         print("\n" + "="*45)
         print("         MCTS BENCHMARK VISUALIZER         ")
         print("="*45)
-        print("1. Analyze Match Pipeline Data (match_summary.csv)")
-        print("2. Analyze Oracle Pipeline Data (oracle_summary.csv)")
+        print("1. Analyze Match Pipeline Data (match_raw.csv)")
+        print("2. Analyze Oracle Pipeline Data (oracle_raw.csv)")
         print("3. Exit")
         
         choice = input("\nSelect data source (1-3): ").strip()
         
         if choice == '1':
-            df = load_data("match_summary.csv")
+            df = load_and_aggregate_data("match_raw.csv", 'Match')
             if df is not None: handle_match_menu(df)
         elif choice == '2':
-            df = load_data("oracle_summary.csv")
+            df = load_and_aggregate_data("oracle_raw.csv", 'Oracle')
             if df is not None: handle_oracle_menu(df)
         elif choice == '3':
             print("Exiting...")

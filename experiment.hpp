@@ -91,9 +91,9 @@ OracleExperimentResult run_oracle_experiment(const ExperimentConfig& config,
 
 // Match CSVs
 void save_match_raw_csv(const MatchExperimentResult& r, bool is_first);
-void save_match_summary_csv(const std::vector<MatchExperimentResult>& all_results);
+// void save_match_summary_csv(const std::vector<MatchExperimentResult>& all_results);
 void print_match_final_summary(const std::vector<MatchExperimentResult>& all_results);
 
 // Oracle CSVs
 void save_oracle_raw_csv(const OracleExperimentResult& r, bool is_first);
-void save_oracle_summary_csv(const std::vector<OracleExperimentResult>& all_results);
+// void save_oracle_summary_csv(const std::vector<OracleExperimentResult>& all_results);

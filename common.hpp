@@ -19,15 +19,20 @@ Example of 3x3 grid:
 #include <cstdint>
 #include <array>
 
+// Allows the board size to be injected at compile time
+#ifndef N_SIZE
+#define N_SIZE 11
+#endif
+
 /* Constants */
 
-using u = std::uint16_t; // max board size: N = 13
+using u = std::uint16_t; 
 
 constexpr int u_SIZE = 512;
 
 enum class Player : u { None, First, Second };
 
-constexpr u N = 15;
+constexpr u N = N_SIZE;
 constexpr u PADDED_N = N + 2;
 constexpr u BOARD_SIZE = PADDED_N * PADDED_N;
 
