@@ -86,15 +86,31 @@ std::vector<State> load_dataset(const std::string& filename) {
             s.board[i++] = static_cast<Player>(std::stoi(cell));
         }
         
-        // Rebuild DSU Connections
+        // -------------------------------------------------------------
+        // FIX: Safe DSU Reconstruction
+        // -------------------------------------------------------------
         s.dsu.init();
-        for (u idx = 0; idx < BOARD_SIZE; ++idx) {
-            if (s.board[idx] != Player::None) {
-                for (u offset : NEIGHBOR_OFFSETS) {
-                    u neighbor = idx + offset;
-                    // Because the board is padded, neighbors will never wrap around dangerously
-                    if (neighbor < BOARD_SIZE && s.board[neighbor] == s.board[idx]) {
-                        s.dsu.unite(idx, neighbor);
+        
+        // 1. Explicitly unite the virtual padding edges
+        for (u r = 1; r <= N; ++r) {
+            s.dsu.unite(0 * PADDED_N + 1, 0 * PADDED_N + r);
+            s.dsu.unite((N + 1) * PADDED_N + 1, (N + 1) * PADDED_N + r);
+            
+            s.dsu.unite(1 * PADDED_N + 0, r * PADDED_N + 0);
+            s.dsu.unite(1 * PADDED_N + (N + 1), r * PADDED_N + (N + 1));
+        }
+
+        // 2. ONLY apply neighbor offsets from the inner playable area.
+        // This prevents an offset from wrapping around the 1D array boundaries.
+        for (u r = 1; r <= N; ++r) {
+            for (u c = 1; c <= N; ++c) {
+                u idx = r * PADDED_N + c;
+                if (s.board[idx] != Player::None) {
+                    for (u offset : NEIGHBOR_OFFSETS) {
+                        u neighbor = idx + offset;
+                        if (s.board[neighbor] == s.board[idx]) {
+                            s.dsu.unite(idx, neighbor);
+                        }
                     }
                 }
             }

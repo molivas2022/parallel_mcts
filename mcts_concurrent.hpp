@@ -95,6 +95,9 @@ struct ConcurrentNodePool {
         n->wins.store(0.0, std::memory_order_relaxed);
         n->children.clear(); 
         n->untried_space = get_actions(s);
+
+        // Pre-allocate vector capacity to prevent concurrent push_back reallocation
+        n->children.reserve(n->untried_space.count);
         
         return n;
     }

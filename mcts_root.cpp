@@ -82,8 +82,8 @@ Action RootParallelAgent::next_action(const State& root_state) {
     }
 
     // Aggregation of all trees
-    // We use size 256 to safely accommodate the SWAP_MOVE (index 255)
-    std::array<int, 256> total_visits = {0}; 
+    // We use size u_SIZE to safely accommodate the SWAP_MOVE (index 255)
+    std::array<int, u_SIZE> total_visits = {0}; 
     for (Node* root : thread_roots) {
         for (Node* child : root->children) {
             total_visits[child->action.move_idx] += child->visits;
@@ -95,7 +95,7 @@ Action RootParallelAgent::next_action(const State& root_state) {
     int max_visits = -1;
 
     // Iterate using a standard int to prevent uint8_t overflow loop (255 + 1 -> 0)
-    for (int i = 0; i < 256; ++i) { 
+    for (int i = 0; i < u_SIZE; ++i) { 
         if (total_visits[i] > max_visits) {
             max_visits = total_visits[i];
             best_action = Action{static_cast<u>(i)};

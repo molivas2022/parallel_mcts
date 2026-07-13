@@ -37,6 +37,9 @@ public:
         : name("Sequential"), simulations(sims), memory_pool(pool_size), eng(std::random_device{}()) {}
 
     Action next_action(const State& root_state) override;
+
+    // Generates the Oracle visit distribution
+    std::array<double, u_SIZE> get_action_scores(const State& root_state);
     
     std::string get_name() const override { return name; }
     int get_simulations() const override { return simulations; }
@@ -149,6 +152,9 @@ public:
     ~VirtualLossParallelAgent() override;
 
     Action next_action(const State& root_state) override;
+
+    // Generates the Oracle visit distribution
+    std::array<double, u_SIZE> get_action_scores(const State& root_state);
     
     std::string get_name() const override { return name; }
     int get_simulations() const override { return simulations; }
