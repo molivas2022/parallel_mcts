@@ -257,6 +257,7 @@ void print_match_final_summary(const std::vector<MatchExperimentResult>& all_res
 OracleExperimentResult run_oracle_experiment(const ExperimentConfig& config, 
                                              const std::vector<State>& dataset, 
                                              const std::vector<std::array<double, u_SIZE>>& oracle_cache,
+                                             int repetitions,
                                              int config_num, int total_configs) {
     
     auto test_agent = create_agent(config);
@@ -270,19 +271,22 @@ OracleExperimentResult run_oracle_experiment(const ExperimentConfig& config,
     for (size_t i = 0; i < dataset.size(); ++i) {
         if (i % (dataset.size() / 10 + 1) == 0) std::cout << "#" << std::flush;
 
-        auto start_time = std::chrono::high_resolution_clock::now();
-        Action action = test_agent->next_action(dataset[i]);
-        auto end_time = std::chrono::high_resolution_clock::now();
-        
-        std::chrono::duration<double, std::milli> duration_ms = end_time - start_time;
+        // Loop 'repetitions' times for the same board state
+        for (int rep = 0; rep < repetitions; ++rep) {
+            auto start_time = std::chrono::high_resolution_clock::now();
+            Action action = test_agent->next_action(dataset[i]);
+            auto end_time = std::chrono::high_resolution_clock::now();
+            
+            std::chrono::duration<double, std::milli> duration_ms = end_time - start_time;
 
-        StateEvalResult eval;
-        eval.state_id = i;
-        eval.chosen_move_idx = action.move_idx;
-        eval.execution_time_ms = duration_ms.count();
-        eval.oracle_score = oracle_cache[i][action.move_idx];
-        
-        res.evals.push_back(eval);
+            StateEvalResult eval;
+            eval.state_id = i;
+            eval.chosen_move_idx = action.move_idx;
+            eval.execution_time_ms = duration_ms.count();
+            eval.oracle_score = oracle_cache[i][action.move_idx];
+            
+            res.evals.push_back(eval);
+        }
     }
     std::cout << "] Done.\n";
 

@@ -21,11 +21,11 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     // Match Pipeline Configuration
     // ========================================================================
-    int match_games = 5;           
-    int match_baseline_sims = 500; // The fixed strength of the opponent
+    int match_games = 100;           
+    int match_baseline_sims = 5000; // The fixed strength of the opponent
     
-    std::vector<int> match_sims_list = {500, 1000, 2000};
-    std::vector<int> match_num_threads = {2, 4, 8};
+    std::vector<int> match_sims_list = {2500, 5000, 10000};
+    std::vector<int> match_num_threads = {2, 3, 4};
     std::vector<AgentType> match_agent_types = {
         AgentType::LeafParallel, AgentType::RootParallel,
         AgentType::LockFree, AgentType::VirtualLoss, AgentType::WuUct
@@ -44,11 +44,12 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     // Oracle Pipeline Configuration
     // ========================================================================
-    int oracle_dataset_size = 10;  
-    int oracle_cache_sims = 10000; // Deep search budget for the Oracle truth
+    int oracle_dataset_size = 500;  
+    int oracle_cache_sims = 100000; // Deep search budget for the Oracle truth
+    int oracle_repetitions = 5;
     
-    std::vector<int> oracle_sims_list = {500, 1000, 2000};
-    std::vector<int> oracle_num_threads = {2, 4, 8};
+    std::vector<int> oracle_sims_list = {1000, 2500, 5000};
+    std::vector<int> oracle_num_threads = {2, 3, 4};
     std::vector<AgentType> oracle_agent_types = {
         AgentType::LeafParallel, AgentType::RootParallel,
         AgentType::LockFree, AgentType::VirtualLoss, AgentType::WuUct
@@ -96,7 +97,7 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     if (run_match) {
         std::cout << "\n[=== STARTING MATCH PIPELINE (N=" << N << ") ===]\n";
-        SequentialAgent baseline_agent(match_baseline_sims); 
+        VirtualLossParallelAgent baseline_agent(match_baseline_sims, 4); 
         std::vector<MatchExperimentResult> match_results;
         bool first_raw_save = true;
 
@@ -118,7 +119,7 @@ int main(int argc, char* argv[]) {
         std::string dataset_file = "dataset.csv";
         
         // Uncomment the next line if you need to generate a fresh dataset
-        generate_dataset(oracle_dataset_size, N*N/2, dataset_file);
+        // generate_dataset(oracle_dataset_size, N*N/2, dataset_file);
 
         std::cout << "Loading dataset from " << dataset_file << "...\n";
         std::vector<State> dataset = load_dataset(dataset_file);
@@ -128,7 +129,7 @@ int main(int argc, char* argv[]) {
         std::vector<std::array<double, u_SIZE>> oracle_cache;
         
         // Oracle is a heavy Virtual Loss search
-        VirtualLossParallelAgent oracle(oracle_cache_sims, 4, 500000); 
+        VirtualLossParallelAgent oracle(oracle_cache_sims, 4, oracle_cache_sims*2); 
         for (size_t i = 0; i < dataset.size(); ++i) {
             oracle_cache.push_back(oracle.get_action_scores(dataset[i]));
             std::cout << "Oracle mapped state " << i + 1 << "/" << dataset.size() << "\r" << std::flush;
@@ -139,7 +140,7 @@ int main(int argc, char* argv[]) {
         bool first_raw_save = true;
 
         for (size_t i = 0; i < oracle_experiments.size(); ++i) {
-            auto res = run_oracle_experiment(oracle_experiments[i], dataset, oracle_cache, i + 1, oracle_experiments.size());
+            auto res = run_oracle_experiment(oracle_experiments[i], dataset, oracle_cache, oracle_repetitions, i + 1, oracle_experiments.size());
             oracle_results.push_back(res);
             
             save_oracle_raw_csv(res, first_raw_save);

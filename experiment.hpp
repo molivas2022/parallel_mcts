@@ -87,6 +87,7 @@ MatchExperimentResult run_match_experiment(const ExperimentConfig& config,
 OracleExperimentResult run_oracle_experiment(const ExperimentConfig& config, 
                                              const std::vector<State>& dataset, 
                                              const std::vector<std::array<double, u_SIZE>>& oracle_cache,
+                                             int repetitions,
                                              int config_num, int total_configs);
 
 // Match CSVs

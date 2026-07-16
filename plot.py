@@ -59,21 +59,20 @@ def plot_common_graphs(df, choice, sub_choice_val, mode):
         plt.title(f'Time per 1k Simulations vs Threads ({sub_choice_val} Sims)', fontsize=14, pad=15)
         plt.ylabel('Time per 1k Simulations (ms)', fontsize=12)
         plt.xlabel('Threads', fontsize=12)
-        plt.xticks([2, 4, 8])
+        plt.xticks([2, 3, 4])
 
     elif choice == '2':
         print("\n--- Plot Description ---")
         print("Visualizing: Parallel Speedup vs. Thread Count.")
         subset = df[(df['Sims'] == sub_choice_val) & (df['Agent'] != 'Sequential')]
         sns.lineplot(data=subset, x='Threads', y='Relative_Speedup', hue='Agent', marker='o', linewidth=2, markersize=8)
-        plt.plot([2, 4, 8], [2, 4, 8], 'k--', label='Ideal Linear Speedup', alpha=0.6)
+        plt.plot([2, 3, 4], [2, 3, 4], 'k--', label='Ideal Linear Speedup', alpha=0.6)
         plt.title(f'Relative Speedup vs Threads ({sub_choice_val} Sims)', fontsize=14, pad=15)
         plt.ylabel('Relative Speedup (x)', fontsize=12)
         plt.xlabel('Threads', fontsize=12)
-        plt.xticks([2, 4, 8])
+        plt.xticks([2, 3, 4])
         plt.legend()
         
-    return plt
 
 def handle_match_menu(df):
     sim_options = sorted(df['Sims'].unique())
@@ -103,7 +102,7 @@ def handle_match_menu(df):
             except (ValueError, IndexError): continue
 
             if choice in ['1', '2']:
-                plt = plot_common_graphs(df, choice, sub_val, 'Match')
+                plot_common_graphs(df, choice, sub_val, 'Match')
             elif choice == '3':
                 plt.figure(figsize=(10, 6))
                 sns.set_theme(style="whitegrid")
@@ -112,12 +111,12 @@ def handle_match_menu(df):
                 plt.title(f'Global Winrate vs Threads ({sub_val} Sims)', fontsize=14, pad=15)
                 plt.ylabel('Global Winrate (%)', fontsize=12)
                 plt.xlabel('Threads', fontsize=12)
-                plt.xticks([2, 4, 8])
+                plt.xticks([2, 3, 4])
             elif choice == '4':
                 plt.figure(figsize=(10, 6))
                 sns.set_theme(style="whitegrid")
                 subset = df[(df['Sims'] == sub_val)]
-                sizes = {1: 50, 2: 100, 4: 200, 8: 350}
+                sizes = {1: 50, 2: 100, 3: 150, 4: 200, 8: 350}
                 sns.scatterplot(data=subset, x='Avg_Time_Per_Turn', y='Global_Winrate', hue='Agent', size='Threads', sizes=sizes, alpha=0.8)
                 plt.title(f'Pareto Front: Efficiency vs Strength ({sub_val} Sims)', fontsize=14, pad=15)
                 plt.ylabel('Global Winrate (%)', fontsize=12)
@@ -170,7 +169,7 @@ def handle_oracle_menu(df):
             except (ValueError, IndexError): continue
 
             if choice in ['1', '2']:
-                plt = plot_common_graphs(df, choice, sub_val, 'Oracle')
+                plot_common_graphs(df, choice, sub_val, 'Oracle')
             elif choice == '3':
                 plt.figure(figsize=(10, 6))
                 sns.set_theme(style="whitegrid")
@@ -179,12 +178,12 @@ def handle_oracle_menu(df):
                 plt.title(f'Oracle Score vs Threads ({sub_val} Sims)', fontsize=14, pad=15)
                 plt.ylabel('Average Oracle Score', fontsize=12)
                 plt.xlabel('Threads', fontsize=12)
-                plt.xticks([2, 4, 8])
+                plt.xticks([2, 3, 4])
             elif choice == '4':
                 plt.figure(figsize=(10, 6))
                 sns.set_theme(style="whitegrid")
                 subset = df[(df['Sims'] == sub_val)]
-                sizes = {1: 50, 2: 100, 4: 200, 8: 350}
+                sizes = {1: 50, 2: 100, 3: 150, 4: 200, 8: 350}
                 sns.scatterplot(data=subset, x='Avg_Time_Per_1k_Sims_Ms', y='Avg_Oracle_Score', hue='Agent', size='Threads', sizes=sizes, alpha=0.8)
                 plt.title(f'Pareto Front: Efficiency vs Strength ({sub_val} Sims)', fontsize=14, pad=15)
                 plt.ylabel('Average Oracle Score', fontsize=12)
