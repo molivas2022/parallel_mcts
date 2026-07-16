@@ -1,17 +1,5 @@
 /*
- * Module: Concurrent MCTS Data Structures
- *
- * This file defines isolated, thread-safe data structures (ConcurrentNode and
- * ConcurrentNodePool) specifically for Tree Parallelization strategies. 
- * By keeping these distinct from the base Node structures, we avoid injecting 
- * atomic operations and memory bloat (like OpenMP locks) into the baseline 
- * Sequential, Leaf, and Root parallel agents, preserving their pure performance 
- * characteristics for accurate benchmarking.
- *
- * Constraints:
- * - Requires OpenMP for node-level structural locking.
- * - Nodes pre-allocate and initialize their locks to avoid data races during
- * tree expansion, trading slightly slower allocation for runtime safety.
+ * This file defines isolated, thread safe data structures specifically for tree parallelization strategies. 
  */
 
 #pragma once
@@ -24,7 +12,7 @@
 #include <iostream>
 #include <omp.h>
 
-/* Concurrent Node */
+/* Concurrent node */
 
 struct ConcurrentNode {
     State state;
@@ -33,14 +21,13 @@ struct ConcurrentNode {
 
     std::vector<ConcurrentNode*> children;
     
-    // Statistics are atomic to allow lock-free Backpropagation and Virtual Loss
+    // atomic statistics allow lock-free
     std::atomic<int> visits;
     std::atomic<double> wins; 
     
     ActionSpace untried_space;
     
-    // Lightweight spinlock strictly used to protect structural modifications
-    // (e.g., popping from untried_space and pushing to children)
+    // spinlock used to protect structural modifications
     omp_lock_t lock;
 
     ConcurrentNode() {
@@ -53,18 +40,16 @@ struct ConcurrentNode {
         omp_destroy_lock(&lock);
     }
 
-    // Disable copy/move semantics to prevent accidental lock duplication
     ConcurrentNode(const ConcurrentNode&) = delete;
     ConcurrentNode& operator=(const ConcurrentNode&) = delete;
 };
 
-/* Concurrent Memory Pool */
+/* Concurrent memory pool */
 
 struct ConcurrentNodePool {
     std::vector<ConcurrentNode> pool;
     
-    // Atomic cursor ensures threads can reserve memory blocks simultaneously
-    // without returning the same pointer to multiple threads.
+    // atomic cursor to safe allocation
     std::atomic<int> cursor;
 
     ConcurrentNodePool(size_t capacity) {
@@ -77,8 +62,8 @@ struct ConcurrentNodePool {
     }
 
     ConcurrentNode* allocate(const State& s, ConcurrentNode* p, Action a) {
-        // memory_order_relaxed is sufficient here because the atomic operation 
-        // only needs to guarantee a unique index, not cross-thread memory synchronization
+
+        // only needs to guarantee a unique index, not cross thread memory synchronization
         int idx = cursor.fetch_add(1, std::memory_order_relaxed);
         
         if (static_cast<size_t>(idx) >= pool.size()) {
@@ -96,7 +81,7 @@ struct ConcurrentNodePool {
         n->children.clear(); 
         n->untried_space = get_actions(s);
 
-        // Pre-allocate vector capacity to prevent concurrent push_back reallocation
+        // pre allocate vector capacity to prevent concurrent push_back reallocation
         n->children.reserve(n->untried_space.count);
         
         return n;

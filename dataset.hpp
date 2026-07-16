@@ -1,10 +1,5 @@
 /*
- * Module: Dataset Generator
- *
- * Utility to generate static, mid-game Hex board states for offline 
- * Oracle evaluation. It plays a fixed number of random moves to ensure 
- * the tree is adequately complex, discarding any games that accidentally 
- * finish too early.
+ * Utility to generate static, mid-game Hex board states for offline Oracle evaluation.
  */
 
 #pragma once

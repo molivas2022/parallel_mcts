@@ -1,9 +1,5 @@
 /*
- * Module: Experiment Definitions
- *
- * Defines the configuration and result structures for both the Match-based 
- * benchmark (full games against a baseline) and the Oracle-based benchmark 
- * (single-turn evaluation against a pre-computed continuous distribution cache).
+ * Defines the configuration and result structures for both the match benchmark and the oracle benchmark
  */
 
 #pragma once
@@ -31,9 +27,7 @@ struct ExperimentConfig {
     int num_threads;    
 };
 
-// ============================================================================
-// Match Pipeline Structures
-// ============================================================================
+// Match pipeline structures
 
 struct MatchResult {
     int match_num;
@@ -54,9 +48,7 @@ struct MatchExperimentResult {
     std::vector<MatchResult> matches;
 };
 
-// ============================================================================
-// Oracle Pipeline Structures
-// ============================================================================
+// Oracle pipeline structures
 
 struct StateEvalResult {
     int state_id;
@@ -74,9 +66,7 @@ struct OracleExperimentResult {
     std::vector<StateEvalResult> evals;
 };
 
-// ============================================================================
-// Runners & IO
-// ============================================================================
+// Runners
 
 MatchExperimentResult run_match_experiment(const ExperimentConfig& config, 
                                            int matches, 
@@ -90,11 +80,13 @@ OracleExperimentResult run_oracle_experiment(const ExperimentConfig& config,
                                              int repetitions,
                                              int config_num, int total_configs);
 
-// Match CSVs
+// match csvs
+
 void save_match_raw_csv(const MatchExperimentResult& r, bool is_first);
 // void save_match_summary_csv(const std::vector<MatchExperimentResult>& all_results);
 void print_match_final_summary(const std::vector<MatchExperimentResult>& all_results);
 
-// Oracle CSVs
+// oracle csvs
+
 void save_oracle_raw_csv(const OracleExperimentResult& r, bool is_first);
 // void save_oracle_summary_csv(const std::vector<OracleExperimentResult>& all_results);

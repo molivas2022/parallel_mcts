@@ -1,10 +1,5 @@
 /*
- * Module: Agent Interfaces
- *
- * Defines the core interface for all MCTS agents. By exposing `get_visit_counts` 
- * as the pure virtual method, the base class automatically provides both discrete
- * play (next_action) and continuous evaluation (get_action_scores) capabilities 
- * to all parallel implementations without code duplication.
+ * Defines the core interface for all mcts agents.
  */
 
 #pragma once
@@ -25,10 +20,10 @@ class Agent {
 public:
     virtual ~Agent() = default;
     
-    // Core search method to be implemented by all parallel approaches
+    // core search method to be implemented by all parallel approaches
     virtual std::array<int, u_SIZE> get_visit_counts(const State& state) = 0;
     
-    // Standard Action Selection for Match pipelines
+    // standard action selection for match pipelines
     Action next_action(const State& state) {
         auto visits = get_visit_counts(state);
         int max_visits = -1;
@@ -43,7 +38,7 @@ public:
         return Action{best_move_idx};
     }
     
-    // Continuous Distribution Evaluation for Oracle pipelines
+    // continuous distribution evaluation for oracle pipelines
     std::array<double, u_SIZE> get_action_scores(const State& state) {
         auto visits = get_visit_counts(state);
         std::array<double, u_SIZE> scores;
@@ -188,7 +183,7 @@ public:
     int get_num_threads() const override { return num_threads; }
 };
 
-/* WU-UCT (OpenMP Task Pipeline) */
+/* WU-UCT */
 class WuUctParallelAgent : public Agent {
 private:
     std::string name;

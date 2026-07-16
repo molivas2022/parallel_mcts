@@ -1,16 +1,8 @@
 /*
- * Module: Virtual Loss MCTS Agent (Thread-Safe Tree Parallelization)
+ * Virtual Loss implementation:
  *
- * This implementation utilizes atomic variables and the "Virtual Loss" 
- * (or Virtual Visit) technique. During the Selection phase, as a thread 
- * descends the tree, it immediately increments the atomic `visits` counter 
- * of each node it selects. 
- *
- * This temporary statistical penalty decreases the node's UCB1 exploit score 
- * and increases the explore pressure for other threads, naturally diverging 
- * concurrent searches and preventing redundant simulations on the same leaf.
- * During Backpropagation, only the atomic `wins` are updated, as the visits 
- * were already accounted for on the way down.
+ * utilizes atomic variables and the virtual loss: during the selection phase, as a thread 
+ * descends the tree, it immediately increments the atomic visits counter
  */
 
 #include "agent.hpp"
@@ -49,10 +41,10 @@ std::array<int, u_SIZE> VirtualLossParallelAgent::get_visit_counts(const State& 
         for (int i = 0; i < thread_sims; ++i) {
             ConcurrentNode* node = root;
             
-            // 0. Apply Virtual Visit to root
+            // Virtual loss
             root->visits.fetch_add(1, std::memory_order_relaxed);
             
-            // 1. Selection
+            // Selection
             while (node->untried_space.count == 0 && !node->children.empty()) {
                 ConcurrentNode* best_child = nullptr;
                 double best_score = -1.0;
@@ -79,11 +71,11 @@ std::array<int, u_SIZE> VirtualLossParallelAgent::get_visit_counts(const State& 
                 }
                 
                 node = best_child;
-                // Apply Virtual Visit on the way down
+                // apply VL on the way down
                 node->visits.fetch_add(1, std::memory_order_relaxed);
             }
             
-            // 2. Expansion (Strictly Protected Topology)
+            // Expansion
             if (node->untried_space.count > 0 && node->state.winner == Player::None) {
                 omp_set_lock(&node->lock);
                 
@@ -108,12 +100,12 @@ std::array<int, u_SIZE> VirtualLossParallelAgent::get_visit_counts(const State& 
                 
                 if (new_child != nullptr) {
                     node = new_child;
-                    // Apply Virtual Visit to the newly expanded child
+                    // apply VL on the expanded child
                     node->visits.fetch_add(1, std::memory_order_relaxed);
                 }
             }
             
-            // 3. Simulation
+            // Simulation
             State sim_state = node->state;
             while (sim_state.winner == Player::None) {
                 ActionSpace space = get_actions(sim_state);
@@ -123,14 +115,12 @@ std::array<int, u_SIZE> VirtualLossParallelAgent::get_visit_counts(const State& 
             }
             Player winner = sim_state.winner;
             
-            // 4. Backpropagation
+            // Backpropagation
             ConcurrentNode* curr = node;
             while (curr != nullptr) {
-                // Notice we do NOT increment `visits` here. 
-                // The thread already incremented `visits` during the descent/expansion.
+                // we do NOT need to increment the visits
                 if (curr->parent != nullptr) {
                     if (winner == curr->parent->state.turn) {
-                        // Safely apply the real win atomicaly
                         curr->wins.fetch_add(1.0, std::memory_order_relaxed);
                     }
                 }

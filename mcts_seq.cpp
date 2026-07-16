@@ -9,7 +9,7 @@ std::array<int, u_SIZE> SequentialAgent::get_visit_counts(const State& root_stat
     for (int i = 0; i < simulations; ++i) {
         Node* node = root;
         
-        // 1. Selection
+        // Selection
         while (node->untried_space.count == 0 && !node->children.empty()) {
             Node* best_child = nullptr;
             double best_score = -1.0;
@@ -25,7 +25,7 @@ std::array<int, u_SIZE> SequentialAgent::get_visit_counts(const State& root_stat
             node = best_child;
         }
         
-        // 2. Expansion
+        // Expansion
         if (node->untried_space.count > 0 && node->state.winner == Player::None) {
             std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
             int idx = dist(eng); 
@@ -42,7 +42,7 @@ std::array<int, u_SIZE> SequentialAgent::get_visit_counts(const State& root_stat
             node = child;
         }
         
-        // 3. Simulation
+        // Simulation
         State sim_state = node->state;
         while (sim_state.winner == Player::None) {
             ActionSpace space = get_actions(sim_state);
@@ -52,7 +52,7 @@ std::array<int, u_SIZE> SequentialAgent::get_visit_counts(const State& root_stat
         }
         Player winner = sim_state.winner;
         
-        // 4. Backpropagation
+        // Backpropagation
         Node* curr = node;
         while (curr != nullptr) {
             curr->visits++;

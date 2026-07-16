@@ -19,7 +19,6 @@ Example of 3x3 grid:
 #include <cstdint>
 #include <array>
 
-// Allows the board size to be injected at compile time
 #ifndef N_SIZE
 #define N_SIZE 11
 #endif
@@ -36,7 +35,7 @@ constexpr u N = N_SIZE;
 constexpr u PADDED_N = N + 2;
 constexpr u BOARD_SIZE = PADDED_N * PADDED_N;
 
-// Special action index to represent the Pie Rule Swap
+// pie rule swap
 constexpr u SWAP_MOVE = u_SIZE - 1;
 
 /* Helpers */

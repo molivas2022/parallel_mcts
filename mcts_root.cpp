@@ -7,10 +7,10 @@
 std::array<int, u_SIZE> RootParallelAgent::get_visit_counts(const State& root_state) {
     int loop_iterations = simulations / num_threads;
     
-    // Root node of each tree
+    // array of roots
     std::vector<Node*> thread_roots(num_threads, nullptr);
 
-    // Parallel section, each thread runs MCTS
+    // each thread runs mcts
     #pragma omp parallel num_threads(num_threads)
     {
         int thread_id = omp_get_thread_num();
@@ -81,8 +81,7 @@ std::array<int, u_SIZE> RootParallelAgent::get_visit_counts(const State& root_st
         }
     }
 
-    // Aggregation of all trees
-    // We use size u_SIZE to safely accommodate the SWAP_MOVE (index 255)
+    // Aggregation
     std::array<int, u_SIZE> total_visits = {0}; 
     for (Node* root : thread_roots) {
         for (Node* child : root->children) {

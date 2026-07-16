@@ -1,44 +1,42 @@
-# Compiler settings
+# compiler settings
 CXX = g++
-N_SIZE ?= 11	# Default N_SIZE if not provided by the user/script
+N_SIZE ?= 11	# default N_SIZE
 CXXFLAGS = -std=c++20 -Wall -Wextra -O3 -march=native -flto -fopenmp -DN_SIZE=$(N_SIZE)
 
-# Executable name
+# executable
 TARGET = main
 
-# Directories
+# directories
 OBJDIR = obj
 
-# Files
+# files
 SRCS = $(wildcard *.cpp)
 
-# Pattern substitution: replaces .cpp with obj/.o and obj/.d
+# pattern substitution
 OBJS = $(patsubst %.cpp, $(OBJDIR)/%.o, $(SRCS))
 DEPS = $(patsubst %.cpp, $(OBJDIR)/%.d, $(SRCS))
 
-# Default target
+# default target
 all: $(TARGET)
 
-# Linking the final executable
+# linking
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-# Compiling individual source files
-# @mkdir -p $(@D) ensures the target directory exists before compiling
+# compiling individual source files
 $(OBJDIR)/%.o: %.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
-# Run the simulation
+# run the simulation
 run: $(TARGET)
 	./$(TARGET)
 
-# Clean up build artifacts
+# clean up build artifacts
 clean:
 	rm -rf $(OBJDIR) $(TARGET)
 
-# Include the auto-generated dependency files
+# include the dependency files
 -include $(DEPS)
 
-# Mark targets that don't represent physical files
 .PHONY: all clean run

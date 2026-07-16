@@ -1,9 +1,5 @@
 /*
- * Module: Experiment Engine
- *
- * Contains the execution loops for both the Match and Oracle benchmark pipelines.
- * The Match pipeline isolates test computation time from the baseline agent. 
- * The Oracle pipeline scores moves instantly using a pre-computed cache.
+ * Contains the execution loops for both the match and oracle benchmark pipelines.
  */
 
 #include "experiment.hpp"
@@ -16,9 +12,7 @@
 #include <fstream>
 #include <numeric>
 
-// ============================================================================
-// Internal Helpers
-// ============================================================================
+/* Helpers */
 
 static std::unique_ptr<Agent> create_agent(const ExperimentConfig& config) {
     switch (config.type) {
@@ -50,7 +44,7 @@ static void print_dashboard(const std::vector<MatchExperimentResult>& past_resul
                   << std::setw(10) << "Sims"
                   << std::setw(10) << "Threads"
                   << std::setw(12) << "Matches" 
-                  << std::setw(15) << "Test Time(s)" << "\n";
+                  << std::setw(15) << "Test Time" << "\n";
         std::cout << std::string(62, '-') << "\n";
         for (const auto& r : past_results) {
             double total_time = 0.0;
@@ -78,9 +72,7 @@ static void print_dashboard(const std::vector<MatchExperimentResult>& past_resul
     std::cout << std::flush;
 }
 
-// ============================================================================
-// Match Pipeline
-// ============================================================================
+/* Match pipeline */
 
 MatchExperimentResult run_match_experiment(const ExperimentConfig& config, 
                                            int matches, 
@@ -250,9 +242,7 @@ void print_match_final_summary(const std::vector<MatchExperimentResult>& all_res
     }
 }
 
-// ============================================================================
-// Oracle Pipeline
-// ============================================================================
+/* Oracle pipeline */
 
 OracleExperimentResult run_oracle_experiment(const ExperimentConfig& config, 
                                              const std::vector<State>& dataset, 

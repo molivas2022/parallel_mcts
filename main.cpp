@@ -1,10 +1,5 @@
 /*
- * Module: Main Entry Point
- *
- * Orchestrates the execution of the MCTS benchmark suite. It provides an 
- * interactive prompt to select between the Match Pipeline (full games) and 
- * the Oracle Pipeline (static evaluation). Configuration grids (simulations,
- * threads, agents) are strictly isolated between the two pipeline modes.
+ * Orchestrates the execution of the mcts benchmark
  */
 
 #include "experiment.hpp"
@@ -18,11 +13,10 @@
 #include <string>
 
 int main(int argc, char* argv[]) {
-    // ========================================================================
-    // Match Pipeline Configuration
-    // ========================================================================
+
+    // Match pipeline
     int match_games = 100;           
-    int match_baseline_sims = 5000; // The fixed strength of the opponent
+    int match_baseline_sims = 5000;
     
     std::vector<int> match_sims_list = {2500, 5000, 10000};
     std::vector<int> match_num_threads = {2, 3, 4};
@@ -41,11 +35,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // ========================================================================
-    // Oracle Pipeline Configuration
-    // ========================================================================
+    // Oracle pipeline
     int oracle_dataset_size = 500;  
-    int oracle_cache_sims = 100000; // Deep search budget for the Oracle truth
+    int oracle_cache_sims = 100000; // budget of the oracle
     int oracle_repetitions = 5;
     
     std::vector<int> oracle_sims_list = {1000, 2500, 5000};
@@ -65,9 +57,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // ========================================================================
-    // CLI Parsing / Interactive Menu
-    // ========================================================================
+    // Interactive menu
     bool run_match = false;
     bool run_oracle = false;
 
@@ -76,13 +66,13 @@ int main(int argc, char* argv[]) {
         if (arg == "--match") run_match = true;
         else if (arg == "--oracle") run_oracle = true;
     } else {
-        std::cout << "========================================\n";
-        std::cout << "        MCTS HEX BENCHMARK SUITE        \n";
-        std::cout << "========================================\n";
-        std::cout << "1. Run Match Pipeline (Full Games)\n";
-        std::cout << "2. Run Oracle Pipeline (Static Eval)\n";
-        std::cout << "3. Run Both\n";
-        std::cout << "Select mode (1-3): ";
+        std::cout << "\n";
+        std::cout << "MCTS HEX\n";
+        std::cout << "\n";
+        std::cout << "1. Match\n";
+        std::cout << "2. Oracle\n";
+        std::cout << "3. Both\n";
+        std::cout << "Select: ";
         
         int choice;
         std::cin >> choice;
@@ -92,11 +82,9 @@ int main(int argc, char* argv[]) {
 
     auto global_start_time = std::chrono::steady_clock::now();
 
-    // ========================================================================
-    // Execute Match Pipeline
-    // ========================================================================
+    // Match pipeline
     if (run_match) {
-        std::cout << "\n[=== STARTING MATCH PIPELINE (N=" << N << ") ===]\n";
+        std::cout << "\nStarting Match (N=" << N << ")\n";
         VirtualLossParallelAgent baseline_agent(match_baseline_sims, 4); 
         std::vector<MatchExperimentResult> match_results;
         bool first_raw_save = true;
@@ -111,30 +99,27 @@ int main(int argc, char* argv[]) {
         print_match_final_summary(match_results);
     }
 
-    // ========================================================================
-    // Execute Oracle Pipeline
-    // ========================================================================
+    // Oracle pipeline
     if (run_oracle) {
-        std::cout << "\n[=== STARTING ORACLE PIPELINE (N=" << N << ") ===]\n";
+        std::cout << "\nStarting Oracle (N=" << N << ")\n";
         std::string dataset_file = "dataset.csv";
         
-        // Uncomment the next line if you need to generate a fresh dataset
-        // generate_dataset(oracle_dataset_size, N*N/2, dataset_file);
+        generate_dataset(oracle_dataset_size, N*N/2, dataset_file);
 
-        std::cout << "Loading dataset from " << dataset_file << "...\n";
+        std::cout << "Loading dataset\n";
         std::vector<State> dataset = load_dataset(dataset_file);
         
-        std::cout << "\n>>> Pre-computing " << oracle_cache_sims << " sims Oracle Cache for " 
-                  << dataset.size() << " states (This takes a moment)...\n";
+        std::cout << "\nPrecomputing " << oracle_cache_sims << " sims for Oracle" 
+                  << dataset.size() << " states...\n";
         std::vector<std::array<double, u_SIZE>> oracle_cache;
         
-        // Oracle is a heavy Virtual Loss search
+        // Oracle
         VirtualLossParallelAgent oracle(oracle_cache_sims, 4, oracle_cache_sims*2); 
         for (size_t i = 0; i < dataset.size(); ++i) {
             oracle_cache.push_back(oracle.get_action_scores(dataset[i]));
             std::cout << "Oracle mapped state " << i + 1 << "/" << dataset.size() << "\r" << std::flush;
         }
-        std::cout << "\nOracle Cache complete! Starting benchmark...\n";
+        std::cout << "\nOracle complete!\n";
 
         std::vector<OracleExperimentResult> oracle_results;
         bool first_raw_save = true;
@@ -146,12 +131,12 @@ int main(int argc, char* argv[]) {
             save_oracle_raw_csv(res, first_raw_save);
             first_raw_save = false;
         }
-        std::cout << "\nOracle Pipeline completed! Raw data saved to oracle_raw.csv\n";
+        std::cout << "\nTested agents completed!\n";
     }
 
     auto global_end_time = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed_seconds = global_end_time - global_start_time;
-    std::cout << "\nTotal execution time: " << elapsed_seconds.count() << " seconds.\n";
+    std::cout << "\nTotal execution time: " << elapsed_seconds.count() << " seconds\n";
 
     return 0;
 }
