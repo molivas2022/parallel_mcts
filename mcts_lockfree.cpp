@@ -1,17 +1,7 @@
 /*
- * Module: Lock-Free MCTS Agent
- *
- * This implementation tests the limits of lock-free heuristic search. It applies
- * a strict OpenMP spinlock EXCLUSIVELY to the tree topology (node expansion) to 
+ * It applies a strict openmp spinlock exclusively to the tree topology (expansion) to 
  * prevent memory corruption and segmentation faults. 
- *
- * However, the Backpropagation and Selection phases are intentionally "racy". 
- * Threads load, modify, and store the visits and wins variables without atomic 
- * guarantees (using an explicit read-modify-write pattern on the atomics with 
- * memory_order_relaxed). This will result in dropped increments ("lost updates") 
- * when threads collide. The goal is to see if the sheer volume of simulations 
- * gained by removing synchronization overhead outweighs the statistical degradation 
- * caused by the race conditions.
+ * The backpropagation and selection phases are intentionally "racy". 
  */
 
 #include "agent.hpp"
@@ -34,7 +24,7 @@ LockFreeParallelAgent::~LockFreeParallelAgent() {
     delete static_cast<ConcurrentNodePool*>(memory_pool_ptr);
 }
 
-Action LockFreeParallelAgent::next_action(const State& root_state) {
+std::array<int, u_SIZE> LockFreeParallelAgent::get_visit_counts(const State& root_state) {
     auto* pool = static_cast<ConcurrentNodePool*>(memory_pool_ptr);
     pool->reset();
     
@@ -45,18 +35,16 @@ Action LockFreeParallelAgent::next_action(const State& root_state) {
         int thread_id = omp_get_thread_num();
         auto& eng = thread_engines[thread_id];
         
-        // Distribute simulations evenly across threads
         int thread_sims = simulations / num_threads;
 
         for (int i = 0; i < thread_sims; ++i) {
             ConcurrentNode* node = root;
             
-            // 1. Selection (Racy reads)
+            // Selection (racy)
             while (node->untried_space.count == 0 && !node->children.empty()) {
                 ConcurrentNode* best_child = nullptr;
                 double best_score = -1.0;
                 
-                // We use memory_order_relaxed because we accept stale data.
                 int parent_visits = node->visits.load(std::memory_order_relaxed);
                 
                 for (ConcurrentNode* child : node->children) {
@@ -65,7 +53,7 @@ Action LockFreeParallelAgent::next_action(const State& root_state) {
                     
                     if (child_visits == 0) {
                         best_child = child;
-                        break; // Immediately explore unvisited nodes
+                        break; // immediately explore unvisited nodes
                     }
                     
                     double exploit = child_wins / child_visits;
@@ -80,15 +68,13 @@ Action LockFreeParallelAgent::next_action(const State& root_state) {
                 node = best_child;
             }
             
-            // 2. Expansion (Strictly Protected Topology)
-            // We MUST lock here because std::vector reallocation or concurrent 
-            // array popping will cause a segfault.
+            // Expansion (protected)
             if (node->untried_space.count > 0 && node->state.winner == Player::None) {
                 omp_set_lock(&node->lock);
                 
                 ConcurrentNode* new_child = nullptr;
                 
-                // Double-check condition after acquiring lock
+                // condition after acquiring lock
                 if (node->untried_space.count > 0) {
                     std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
                     int idx = dist(eng); 
@@ -104,7 +90,7 @@ Action LockFreeParallelAgent::next_action(const State& root_state) {
                     node->children.push_back(new_child);
                 }
                 
-                // Unlock the parent BEFORE moving down the tree
+                // unlock
                 omp_unset_lock(&node->lock);
                 
                 if (new_child != nullptr) {
@@ -112,7 +98,7 @@ Action LockFreeParallelAgent::next_action(const State& root_state) {
                 }
             }
             
-            // 3. Simulation
+            // Simulation
             State sim_state = node->state;
             while (sim_state.winner == Player::None) {
                 ActionSpace space = get_actions(sim_state);
@@ -122,13 +108,10 @@ Action LockFreeParallelAgent::next_action(const State& root_state) {
             }
             Player winner = sim_state.winner;
             
-            // 4. Backpropagation (Intentional Data Races)
+            // Backprop (racy)
             ConcurrentNode* curr = node;
             while (curr != nullptr) {
-                // EXPLICIT RACE CONDITION: 
-                // Load -> Local Add -> Store. 
-                // If two threads execute the Load simultaneously, one addition is permanently lost.
-                // This simulates a purely lock-free approach without triggering undefined behavior.
+                // ¡purely lock-free approach without triggering undefined behavior!
                 int current_visits = curr->visits.load(std::memory_order_relaxed);
                 curr->visits.store(current_visits + 1, std::memory_order_relaxed);
                 
@@ -143,15 +126,12 @@ Action LockFreeParallelAgent::next_action(const State& root_state) {
         }
     }
     
-    // Select best move based on raw visits at the root
-    Action best_action{0};
-    int max_visits = -1;
-    for (ConcurrentNode* child : root->children) {
-        int v = child->visits.load(std::memory_order_relaxed);
-        if (v > max_visits) {
-            max_visits = v;
-            best_action = child->action;
-        }
+    std::array<int, u_SIZE> total_visits;
+    total_visits.fill(0);
+    
+    for (auto* child : root->children) {
+        total_visits[child->action.move_idx] = child->visits.load(std::memory_order_relaxed);
     }
-    return best_action;
+    
+    return total_visits;
 }

@@ -1,14 +1,5 @@
 /*
- * Module: WU-UCT Data Structures
- *
- * This file defines isolated data structures designed exclusively for the 
- * OpenMP Task-Based Pipeline architecture (WU-UCT).
- *
- * Because a single Master thread exclusively performs Selection and Expansion,
- * the tree topology (children vectors, untried spaces) is structurally safe 
- * and requires ZERO locks. However, because OpenMP worker tasks asynchronously 
- * perform Backpropagation, the node statistics (visits, wins, unobserved) 
- * must be atomic to prevent data races.
+ * Isolated data structures designed exclusively for the task based agent
  */
 
 #pragma once
@@ -27,11 +18,9 @@ struct WuNode {
 
     std::vector<WuNode*> children;
     
-    // Statistics updated asynchronously by OpenMP tasks
     std::atomic<int> visits;
     std::atomic<double> wins; 
     
-    // Unobserved samples tracker (on-going incomplete simulation queries)
     std::atomic<int> unobserved; 
     
     ActionSpace untried_space;
@@ -42,7 +31,6 @@ struct WuNode {
         unobserved.store(0, std::memory_order_relaxed);
     }
     
-    // Disable copy/move to prevent atomic state corruption
     WuNode(const WuNode&) = delete;
     WuNode& operator=(const WuNode&) = delete;
 };
@@ -78,7 +66,7 @@ struct WuNodePool {
         n->children.clear(); 
         n->untried_space = get_actions(s);
         
-        // Reserve capacity to prevent vector reallocation
+        // reserve capacity to prevent vector reallocation
         n->children.reserve(n->untried_space.count);
         
         return n;

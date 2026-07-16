@@ -1,8 +1,8 @@
 #include "agent.hpp"
-
 #include <cmath>
+#include <array>
 
-Action SequentialAgent::next_action(const State& root_state) {
+std::array<int, u_SIZE> SequentialAgent::get_visit_counts(const State& root_state) {
     memory_pool.reset();
     Node* root = memory_pool.allocate(root_state, nullptr, Action{0});
 
@@ -52,26 +52,23 @@ Action SequentialAgent::next_action(const State& root_state) {
         }
         Player winner = sim_state.winner;
         
-        // Backprop
+        // Backpropagation
         Node* curr = node;
         while (curr != nullptr) {
             curr->visits++;
-            if (curr->parent != nullptr) {
-                if (winner == curr->parent->state.turn) {
-                    curr->wins += 1.0;
-                }
+            if (curr->parent != nullptr && winner == curr->parent->state.turn) {
+                curr->wins += 1.0;
             }
             curr = curr->parent;
         }
     }
     
-    Action best_action{0};
-    int max_visits = -1;
+    std::array<int, u_SIZE> total_visits;
+    total_visits.fill(0);
+    
     for (Node* child : root->children) {
-        if (child->visits > max_visits) {
-            max_visits = child->visits;
-            best_action = child->action;
-        }
+        total_visits[child->action.move_idx] = child->visits;
     }
-    return best_action;
+    
+    return total_visits;
 }

@@ -1,16 +1,5 @@
 /*
- * Module: Thread-Safe Queue and Concurrency Utilities
- *
- * This file provides the synchronization primitives required for Pipeline 
- * (Master-Worker) Tree Parallelization. Unlike standard OpenMP loops which 
- * execute synchronously, the WU-UCT algorithm requires long-lived worker 
- * threads that idle asynchronously until work is available.
- *
- * The ThreadSafeQueue safely passes data (like pending simulations or 
- * completed results) between the master thread and worker threads without 
- * data races. It uses a condition variable to put worker threads to sleep 
- * when the queue is empty, ensuring they consume 0% CPU while waiting, 
- * and immediately wakes them when a task is pushed.
+ * Thread safe queue and concurrency utilities
  */
 
 #pragma once
@@ -27,31 +16,25 @@ private:
     std::mutex mtx_;
     std::condition_variable cv_;
     
-    // Flag to gracefully release waiting threads during application shutdown
+    // flag to release waiting threads when shutddown
     bool shutdown_flag_ = false;
 
 public:
     ThreadSafeQueue() = default;
     
-    // Disable copying to prevent accidental duplication of mutexes
     ThreadSafeQueue(const ThreadSafeQueue&) = delete;
     ThreadSafeQueue& operator=(const ThreadSafeQueue&) = delete;
 
-    /*
-     * Pushes a new item into the queue and wakes up exactly one sleeping 
-     * worker thread to process it.
-     */
+    // pushes a new item into the queue and wakes up exactly one sleeping worker thread
     void push(T value) {
         std::lock_guard<std::mutex> lock(mtx_);
         queue_.push(std::move(value));
         cv_.notify_one();
     }
 
-    /*
-     * Used by worker threads. If the queue is empty, the thread goes to sleep.
-     * It wakes up when a new item is pushed or when the queue is shut down.
-     * Returns false if the queue was shut down while empty.
-     */
+    // used by workers: if the queue is empty, the thread goes to sleep
+    // it wakes up when a new item is pushed or when the queue is shut down
+    // returns false if the queue was shut down while empty
     bool wait_and_pop(T& value) {
         std::unique_lock<std::mutex> lock(mtx_);
         
@@ -69,10 +52,7 @@ public:
         return true;
     }
 
-    /*
-     * Used by the master thread to instantly check for completed results 
-     * without blocking its MCTS tree traversal loop.
-     */
+    // used by the master thread to instantly check for completed results without blocking the tree
     bool try_pop(T& value) {
         std::lock_guard<std::mutex> lock(mtx_);
         if (queue_.empty()) {
@@ -83,10 +63,7 @@ public:
         return true;
     }
 
-    /*
-     * Safely unblocks all waiting threads and flags the queue as shutting down.
-     * Required to prevent deadlocks when the MCTS agent is destroyed.
-     */
+    // safely unblocks all waiting threads and flags on shutdown
     void shutdown() {
         std::lock_guard<std::mutex> lock(mtx_);
         shutdown_flag_ = true;

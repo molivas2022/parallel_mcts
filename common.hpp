@@ -19,18 +19,24 @@ Example of 3x3 grid:
 #include <cstdint>
 #include <array>
 
+#ifndef N_SIZE
+#define N_SIZE 11
+#endif
+
 /* Constants */
 
-using u = std::uint8_t; // max board size: N = 13
+using u = std::uint16_t; 
+
+constexpr int u_SIZE = 512;
 
 enum class Player : u { None, First, Second };
 
-constexpr u N = 11;
+constexpr u N = N_SIZE;
 constexpr u PADDED_N = N + 2;
 constexpr u BOARD_SIZE = PADDED_N * PADDED_N;
 
-// Special action index to represent the Pie Rule Swap
-constexpr u SWAP_MOVE = 255;
+// pie rule swap
+constexpr u SWAP_MOVE = u_SIZE - 1;
 
 /* Helpers */
 

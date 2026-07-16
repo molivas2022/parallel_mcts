@@ -1,69 +1,142 @@
+/*
+ * Orchestrates the execution of the mcts benchmark
+ */
+
 #include "experiment.hpp"
 #include "agent.hpp"
+#include "dataset.hpp"
 
 #include <vector>
 #include <chrono>
 #include <iostream>
+#include <array>
+#include <string>
 
-int main() {
-    int matches = 50;
-    int sims = 5000;
+int main(int argc, char* argv[]) {
 
-    // int matches = 1;
-    // int sims = 100;
-
-    SequentialAgent baseline_agent(sims); 
-
-    std::vector<ExperimentConfig> experiments;
-
-    std::array<int, 3> all_sims_mults = {1, 2, 4};
-
-    std::array<AgentType, 5> all_agent_types = {
-        AgentType::LeafParallel,
-        AgentType::RootParallel,
-        AgentType::LockFree,
-        AgentType::VirtualLoss,
-        AgentType::WuUct
+    // Match pipeline
+    int match_games = 100;           
+    int match_baseline_sims = 5000;
+    
+    std::vector<int> match_sims_list = {2500, 5000, 10000};
+    std::vector<int> match_num_threads = {2, 3, 4};
+    std::vector<AgentType> match_agent_types = {
+        AgentType::LeafParallel, AgentType::RootParallel,
+        AgentType::LockFree, AgentType::VirtualLoss, AgentType::WuUct
     };
 
-    std::array<int, 3> all_num_threads = {2, 4, 8};
-
-    for (int sims_mult: all_sims_mults) {
-        experiments.push_back({AgentType::Sequential, sims * sims_mult, 1});
-        for (AgentType agent_type: all_agent_types) {
-            for (int num_threads: all_num_threads) {
-                experiments.push_back({agent_type, sims * sims_mult, num_threads});
+    std::vector<ExperimentConfig> match_experiments;
+    for (int sims : match_sims_list) {
+        match_experiments.push_back({AgentType::Sequential, sims, 1});
+        for (AgentType agent_type : match_agent_types) {
+            for (int num_threads : match_num_threads) {
+                match_experiments.push_back({agent_type, sims, num_threads});
             }
         }
     }
 
-    std::vector<ExperimentResult> all_results;
-    bool first_raw_save = true;
+    // Oracle pipeline
+    int oracle_dataset_size = 500;  
+    int oracle_cache_sims = 100000; // budget of the oracle
+    int oracle_repetitions = 5;
+    
+    std::vector<int> oracle_sims_list = {1000, 2500, 5000};
+    std::vector<int> oracle_num_threads = {2, 3, 4};
+    std::vector<AgentType> oracle_agent_types = {
+        AgentType::LeafParallel, AgentType::RootParallel,
+        AgentType::LockFree, AgentType::VirtualLoss, AgentType::WuUct
+    };
 
-    // Start the clock
-    auto start_time = std::chrono::steady_clock::now();
-
-    for (size_t i = 0; i < experiments.size(); ++i) {
-        auto res = run_experiment(experiments[i], matches, baseline_agent, all_results, i + 1, experiments.size());
-        all_results.push_back(res);
-        
-        // Append raw match data as soon as the experiment finishes
-        save_raw_csv(res, first_raw_save);
-        first_raw_save = false;
+    std::vector<ExperimentConfig> oracle_experiments;
+    for (int sims : oracle_sims_list) {
+        oracle_experiments.push_back({AgentType::Sequential, sims, 1});
+        for (AgentType agent_type : oracle_agent_types) {
+            for (int num_threads : oracle_num_threads) {
+                oracle_experiments.push_back({agent_type, sims, num_threads});
+            }
+        }
     }
 
-    // Stop the clock
-    auto end_time = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsed_seconds = end_time - start_time;
+    // Interactive menu
+    bool run_match = false;
+    bool run_oracle = false;
 
-    // Generate the calculated summary table
-    save_summary_csv(all_results);
-    
-    print_final_summary(all_results);
+    if (argc > 1) {
+        std::string arg = argv[1];
+        if (arg == "--match") run_match = true;
+        else if (arg == "--oracle") run_oracle = true;
+    } else {
+        std::cout << "\n";
+        std::cout << "MCTS HEX\n";
+        std::cout << "\n";
+        std::cout << "1. Match\n";
+        std::cout << "2. Oracle\n";
+        std::cout << "3. Both\n";
+        std::cout << "Select: ";
+        
+        int choice;
+        std::cin >> choice;
+        run_match = (choice == 1 || choice == 3);
+        run_oracle = (choice == 2 || choice == 3);
+    }
 
-    // Print the total time
-    std::cout << "\nTotal time elapsed for all experiments: " 
-              << elapsed_seconds.count() << " seconds\n";
+    auto global_start_time = std::chrono::steady_clock::now();
+
+    // Match pipeline
+    if (run_match) {
+        std::cout << "\nStarting Match (N=" << N << ")\n";
+        VirtualLossParallelAgent baseline_agent(match_baseline_sims, 4); 
+        std::vector<MatchExperimentResult> match_results;
+        bool first_raw_save = true;
+
+        for (size_t i = 0; i < match_experiments.size(); ++i) {
+            auto res = run_match_experiment(match_experiments[i], match_games, baseline_agent, match_results, i + 1, match_experiments.size());
+            match_results.push_back(res);
+            
+            save_match_raw_csv(res, first_raw_save);
+            first_raw_save = false;
+        }
+        print_match_final_summary(match_results);
+    }
+
+    // Oracle pipeline
+    if (run_oracle) {
+        std::cout << "\nStarting Oracle (N=" << N << ")\n";
+        std::string dataset_file = "dataset.csv";
+        
+        generate_dataset(oracle_dataset_size, N*N/2, dataset_file);
+
+        std::cout << "Loading dataset\n";
+        std::vector<State> dataset = load_dataset(dataset_file);
+        
+        std::cout << "\nPrecomputing " << oracle_cache_sims << " sims for Oracle" 
+                  << dataset.size() << " states...\n";
+        std::vector<std::array<double, u_SIZE>> oracle_cache;
+        
+        // Oracle
+        VirtualLossParallelAgent oracle(oracle_cache_sims, 4, oracle_cache_sims*2); 
+        for (size_t i = 0; i < dataset.size(); ++i) {
+            oracle_cache.push_back(oracle.get_action_scores(dataset[i]));
+            std::cout << "Oracle mapped state " << i + 1 << "/" << dataset.size() << "\r" << std::flush;
+        }
+        std::cout << "\nOracle complete!\n";
+
+        std::vector<OracleExperimentResult> oracle_results;
+        bool first_raw_save = true;
+
+        for (size_t i = 0; i < oracle_experiments.size(); ++i) {
+            auto res = run_oracle_experiment(oracle_experiments[i], dataset, oracle_cache, oracle_repetitions, i + 1, oracle_experiments.size());
+            oracle_results.push_back(res);
+            
+            save_oracle_raw_csv(res, first_raw_save);
+            first_raw_save = false;
+        }
+        std::cout << "\nTested agents completed!\n";
+    }
+
+    auto global_end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed_seconds = global_end_time - global_start_time;
+    std::cout << "\nTotal execution time: " << elapsed_seconds.count() << " seconds\n";
 
     return 0;
 }

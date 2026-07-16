@@ -12,6 +12,6 @@ struct DSU {
     void init();
     u find(u i);
     
-    // NOTE: its possible to implement rank optimization, but it has a large cost in state overhead (the entire board)
+    // TO DO: its possible to implement rank optimization, but it has a large cost in state overhead (the entire board)
     void unite(u i, u j);
 };

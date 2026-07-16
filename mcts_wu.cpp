@@ -1,16 +1,7 @@
 /*
- * Module: WU-UCT MCTS Agent (OpenMP Task Parallelization)
- *
- * This implements the Pipeline architecture using OpenMP Tasking. 
- * An OpenMP parallel region wakes up a team of threads. A single Master 
- * thread traverses the MCTS tree, performing Selection and Expansion safely
- * without locks. 
- * 
- * It tracks unobserved samples (O_s) to retain exploration diversity. 
- * When a node is expanded, the Master spawns an OpenMP task. The OpenMP 
- * runtime automatically distributes these simulation tasks to the idle 
- * worker threads in the team, which asynchronously execute the rollout 
- * and perform the Complete Update via atomic operations.
+ * This implements the task based agent using open mp tasking.
+ * A single master performs selection and expansion
+ * workers execute simulation and backprop
  */
 
 #include "agent.hpp"
@@ -19,6 +10,7 @@
 #include <cmath>
 #include <random>
 #include <omp.h>
+#include <vector>
 
 WuUctParallelAgent::WuUctParallelAgent(int sims, int threads, size_t pool_size)
     : name("WuUct"), simulations(sims), num_threads(threads) 
@@ -30,23 +22,31 @@ WuUctParallelAgent::~WuUctParallelAgent() {
     delete static_cast<WuNodePool*>(memory_pool_ptr);
 }
 
-Action WuUctParallelAgent::next_action(const State& root_state) {
+std::array<int, u_SIZE> WuUctParallelAgent::get_visit_counts(const State& root_state) {
     auto* pool = static_cast<WuNodePool*>(memory_pool_ptr);
     pool->reset();
     WuNode* root = pool->allocate(root_state, nullptr, Action{0});
 
-    // Wake up the team of threads
+    // pre allocate random engines for all threads to avoid the thread local overhead
+    std::vector<std::mt19937> sim_engines(num_threads);
+    std::random_device rd;
+    for (int i = 0; i < num_threads; ++i) {
+        sim_engines[i].seed(rd());
+    }
+
+    // team of threads
     #pragma omp parallel num_threads(num_threads)
     {
-        // Restrict tree traversal to a single Master thread
+        // tree transversal reserved to the master
         #pragma omp single
         {
-            std::mt19937 master_eng(std::random_device{}());
+            // it has its own random engine
+            std::mt19937 master_eng(rd());
 
             for (int i = 0; i < simulations; ++i) {
                 WuNode* node = root;
                 
-                // 1. Selection (Master Only)
+                // Selection (master)
                 while (node->untried_space.count == 0 && !node->children.empty()) {
                     WuNode* best_child = nullptr;
                     double best_score = -1.0;
@@ -78,7 +78,7 @@ Action WuUctParallelAgent::next_action(const State& root_state) {
                     node = best_child;
                 }
                 
-                // 2. Expansion (Master Only)
+                // Expansion (master)
                 if (node->untried_space.count > 0 && node->state.winner == Player::None) {
                     std::uniform_int_distribution<int> dist(0, node->untried_space.count - 1);
                     int idx = dist(master_eng); 
@@ -95,37 +95,40 @@ Action WuUctParallelAgent::next_action(const State& root_state) {
                     node = child;
                 }
                 
-                // 3. Incomplete Update (Master Only)
+                // unobserved update (still master)
                 WuNode* curr_inc = node;
                 while (curr_inc != nullptr) {
                     curr_inc->unobserved.fetch_add(1, std::memory_order_relaxed);
                     curr_inc = curr_inc->parent;
                 }
                 
-                // 4. Dispatch Simulation Task to Workers
-                // firstprivate(node) safely passes the pointer to the async task
-                #pragma omp task firstprivate(node)
+                // Dispacth the workers
+                // firstprivate safely passes the node pointer
+                // shared safely exposes the engines
+                #pragma omp task firstprivate(node) shared(sim_engines)
                 {
-                    std::mt19937 task_eng(std::random_device{}());
+                    int thread_id = omp_get_thread_num();
+                    auto& worker_eng = sim_engines[thread_id];
+                    
                     State sim_state = node->state;
                     
-                    // Simulation Phase (Heavy workload executed by workers)
+                    // Simulation (workers)
                     while (sim_state.winner == Player::None) {
                         ActionSpace space = get_actions(sim_state);
                         if (space.count == 0) break;
                         std::uniform_int_distribution<int> dist(0, space.count - 1);
-                        next_state(sim_state, space.actions[dist(task_eng)]);
+                        next_state(sim_state, space.actions[dist(worker_eng)]);
                     }
                     Player winner = sim_state.winner;
                     
-                    // Complete Update (Backpropagation executed by workers)
+                    // complete updated: no longer unobserved (workers)
                     WuNode* curr_comp = node;
                     while (curr_comp != nullptr) {
                         curr_comp->unobserved.fetch_sub(1, std::memory_order_relaxed);
                         curr_comp->visits.fetch_add(1, std::memory_order_relaxed);
                         
                         if (curr_comp->parent != nullptr && winner == curr_comp->parent->state.turn) {
-                            // C++17 safe atomic double addition via CAS
+
                             double current_wins = curr_comp->wins.load(std::memory_order_relaxed);
                             while (!curr_comp->wins.compare_exchange_weak(current_wins, current_wins + 1.0, 
                                                                           std::memory_order_relaxed, 
@@ -133,23 +136,20 @@ Action WuUctParallelAgent::next_action(const State& root_state) {
                         }
                         curr_comp = curr_comp->parent;
                     }
-                } // End of task
+                }
             }
             
-            // Wait for all dispatched simulation tasks to complete before choosing a move
+            // wait for all the dispatch simulations
             #pragma omp taskwait
-        } // End of single Master thread
-    } // End of parallel region
-    
-    // Select best move
-    Action best_action{0};
-    int max_visits = -1;
-    for (WuNode* child : root->children) {
-        int child_visits = child->visits.load(std::memory_order_relaxed);
-        if (child_visits > max_visits) {
-            max_visits = child_visits;
-            best_action = child->action;
-        }
+        } // end of master
     }
-    return best_action;
+    
+    std::array<int, u_SIZE> total_visits;
+    total_visits.fill(0);
+    
+    for (auto* child : root->children) {
+        total_visits[child->action.move_idx] = child->visits.load(std::memory_order_relaxed);
+    }
+    
+    return total_visits;
 }

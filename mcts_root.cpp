@@ -4,13 +4,13 @@
 #include <omp.h>
 #include <array>
 
-Action RootParallelAgent::next_action(const State& root_state) {
+std::array<int, u_SIZE> RootParallelAgent::get_visit_counts(const State& root_state) {
     int loop_iterations = simulations / num_threads;
     
-    // Root node of each tree
+    // array of roots
     std::vector<Node*> thread_roots(num_threads, nullptr);
 
-    // Parallel section, each thread runs MCTS
+    // each thread runs mcts
     #pragma omp parallel num_threads(num_threads)
     {
         int thread_id = omp_get_thread_num();
@@ -81,26 +81,13 @@ Action RootParallelAgent::next_action(const State& root_state) {
         }
     }
 
-    // Aggregation of all trees
-    // We use size 256 to safely accommodate the SWAP_MOVE (index 255)
-    std::array<int, 256> total_visits = {0}; 
+    // Aggregation
+    std::array<int, u_SIZE> total_visits = {0}; 
     for (Node* root : thread_roots) {
         for (Node* child : root->children) {
             total_visits[child->action.move_idx] += child->visits;
         }
     }
-
-    // Selection of the most visited move
-    Action best_action{0};
-    int max_visits = -1;
-
-    // Iterate using a standard int to prevent uint8_t overflow loop (255 + 1 -> 0)
-    for (int i = 0; i < 256; ++i) { 
-        if (total_visits[i] > max_visits) {
-            max_visits = total_visits[i];
-            best_action = Action{static_cast<u>(i)};
-        }
-    }
     
-    return best_action;
+    return total_visits;
 }
